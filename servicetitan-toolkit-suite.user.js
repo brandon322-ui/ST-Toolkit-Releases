@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.8
+// @version      1.0.10
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.8 loaded\nBuilt: 2026-07-07T15:28:21.360Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.23\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.10 loaded\nBuilt: 2026-07-07T16:18:38.386Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.23';
+    const VERSION = '3.3.24';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -907,6 +907,7 @@
     };
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
     const OPERATIONAL_READINESS_CACHE_MS = 60000;
+    const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
 
     const TAB_ID = getTabId();
 
@@ -1191,6 +1192,10 @@
 
     function setToolkitMessage(message) {
         Store.setMessage(message);
+    }
+
+    function isReadinessBlockerMessage(message) {
+        return READINESS_BLOCKER_MESSAGE_PATTERN.test(String(message || ''));
     }
 
     function markReviewedTab() {
@@ -2109,8 +2114,85 @@
         getUnmetChecks(invoiceNumber, businessUnitSource = {}) {
             return this.getCachedChecks(invoiceNumber, businessUnitSource)
                 .filter(check => check.status !== 'pass');
+        },
+
+        getState(invoiceNumber, businessUnitSource = {}) {
+            const checkingChecks = this.unknownChecks(businessUnitSource)
+                .map(check => ({
+                    ...check,
+                    displayText: `${check.label}: Checking...`
+                }));
+
+            if (!invoiceNumber) {
+                return {
+                    status: 'loading',
+                    checks: checkingChecks,
+                    blockers: [],
+                    loading: true
+                };
+            }
+
+            const readiness = Store.getOperationalReadiness();
+            const cachedAt = Date.parse(readiness?.at || '');
+            const requiredCheckIds = checkingChecks.map(check => check.id);
+            const hasAllChecks = requiredCheckIds.every(id =>
+                readiness?.checks?.some(check => check.id === id)
+            );
+            const cacheFresh =
+                readiness?.invoiceNumber === invoiceNumber &&
+                hasAllChecks &&
+                Number.isFinite(cachedAt) &&
+                Date.now() - cachedAt < OPERATIONAL_READINESS_CACHE_MS;
+            const inFlight =
+                readinessFetchState?.invoiceNumber === invoiceNumber &&
+                readinessFetchState.inFlight;
+
+            if (!cacheFresh) {
+                return {
+                    status: 'loading',
+                    checks: checkingChecks,
+                    blockers: [],
+                    loading: true
+                };
+            }
+
+            const checks = readiness.checks;
+
+            if (inFlight || checks.some(check => check.status === 'unknown')) {
+                return {
+                    status: 'loading',
+                    checks: checkingChecks,
+                    blockers: [],
+                    loading: true
+                };
+            }
+
+            const blockers = checks.filter(check => check.status === 'fail' && check.isBlocker);
+
+            if (blockers.length) {
+                return {
+                    status: 'blocked',
+                    checks,
+                    blockers,
+                    loading: false
+                };
+            }
+
+            return {
+                status: 'pass',
+                checks,
+                blockers: [],
+                loading: false
+            };
         }
     };
+
+    function getOperationalReadinessState(invoiceNumber = getInvoiceNumber()) {
+        return OperationalReadiness.getState(
+            invoiceNumber,
+            getBusinessUnitReadinessSourceFromDom()
+        );
+    }
 
     function refreshOperationalReadinessIfNeeded(invoiceNumber) {
         if (!invoiceNumber) return;
@@ -2256,6 +2338,18 @@
             : 'Running in another tab';
     }
 
+    function cleanupStaleRunner() {
+        const runner = Store.getRunner();
+
+        if (!isRunnerHeartbeatStale(runner)) return false;
+
+        Store.clearRunner();
+        runnerBusy = false;
+        lastProcessedInvoice = null;
+        setToolkitMessage('Cleared stale batch runner from a closed tab.');
+        return true;
+    }
+
     function getMaterialCleanupMessage(deleted, total) {
         return total === null
             ? 'Cleaning materials…'
@@ -2375,12 +2469,16 @@
             return false;
         }
 
-        const operationalBlockers = OperationalReadiness.getUnmetChecks(
-            invoiceNumber,
-            getBusinessUnitReadinessSourceFromDom()
-        );
-        if (operationalBlockers.length) {
-            setToolkitMessage(`Cannot mark reviewed until all readiness checks pass: ${operationalBlockers.map(check => check.displayText).join('; ')}.`);
+        const readinessState = getOperationalReadinessState(invoiceNumber);
+
+        if (readinessState.status === 'loading') {
+            setToolkitMessage('Cannot mark reviewed while readiness checks are still loading.');
+            createBox();
+            return false;
+        }
+
+        if (readinessState.status === 'blocked') {
+            setToolkitMessage(`Cannot mark reviewed until all readiness checks pass: ${readinessState.blockers.map(check => check.displayText).join('; ')}.`);
             createBox();
             return false;
         }
@@ -2521,9 +2619,10 @@
         createBox();
     }
 
-    async function batchCurrentInvoiceSilently() {
+    async function batchCurrentInvoiceSilently(options = {}) {
         const invoiceNumber = getInvoiceNumber();
         const activeBatch = Store.getActiveBatch();
+        const skipReadinessCheck = options.skipReadinessCheck === true;
 
         if (!invoiceNumber) throw new Error('Could not find invoice number.');
         if (!activeBatch?.batchName) throw new Error('No Active Batch set.');
@@ -2533,12 +2632,16 @@
             );
         }
 
-        const operationalBlockers = OperationalReadiness.getUnmetChecks(
-            invoiceNumber,
-            getBusinessUnitReadinessSourceFromDom()
-        );
-        if (operationalBlockers.length) {
-            throw new Error(`Cannot batch until all readiness checks pass: ${operationalBlockers.map(check => check.displayText).join('; ')}.`);
+        if (!skipReadinessCheck) {
+            const readinessState = getOperationalReadinessState(invoiceNumber);
+
+            if (readinessState.status === 'loading') {
+                throw new Error('Cannot batch while readiness checks are still loading.');
+            }
+
+            if (readinessState.status === 'blocked') {
+                throw new Error(`Cannot batch until all readiness checks pass: ${readinessState.blockers.map(check => check.displayText).join('; ')}.`);
+            }
         }
 
         if (isCurrentlyBatchedInServiceTitan()) {
@@ -2627,6 +2730,8 @@
     }
 
     function startBatchReviewedQueue() {
+        cleanupStaleRunner();
+
         const activeBatch = Store.getActiveBatch();
         const queue = Store.getQueue();
         const existingRunner = Store.getRunner();
@@ -2683,6 +2788,8 @@
     }
 
     function retryFailedInvoices() {
+        cleanupStaleRunner();
+
         const runner = Store.getRunner();
 
         if (runner?.running) {
@@ -2737,6 +2844,10 @@
 
         const runner = Store.getRunner();
         if (!runner?.running) return;
+        if (cleanupStaleRunner()) {
+            createBox();
+            return;
+        }
         if (runner.ownerTabId !== TAB_ID) return;
 
         const invoiceNumber = getInvoiceNumber();
@@ -2760,12 +2871,14 @@
                 );
 
                 lastProcessedInvoice = invoiceNumber;
-                await batchCurrentInvoiceSilently();
+                const batchResult = await batchCurrentInvoiceSilently({ skipReadinessCheck: true });
 
                 const updated = Store.getRunner();
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
 
-                updated.successes.push(invoiceNumber);
+                if (!batchResult.skipped) {
+                    updated.successes.push(invoiceNumber);
+                }
                 updated.remaining = updated.remaining.filter(n => n !== invoiceNumber);
                 updated.currentInvoice = null;
                 Store.saveRunner(stampRunnerHeartbeat(updated));
@@ -2980,24 +3093,23 @@
         injectStyle();
 
         document.getElementById(TOOL_ID)?.remove();
+        cleanupStaleRunner();
 
         const invoiceNumber = getInvoiceNumber();
-        const queue = Store.getQueue();
+        let queue = Store.getQueue();
         const activeBatch = Store.getActiveBatch();
         const runner = Store.getRunner();
         const storedMessage = Store.getMessage();
         const materialCleanup = Store.getMaterialCleanup();
         const sections = Store.getSections();
-        const businessUnitSource = getBusinessUnitReadinessSourceFromDom();
-        const readinessChecks = invoiceNumber
-            ? OperationalReadiness.getCachedChecks(invoiceNumber, businessUnitSource)
-            : OperationalReadiness.unknownChecks(businessUnitSource);
-        const readinessBlocked = readinessChecks.some(check => check.status !== 'pass');
+        const readinessState = getOperationalReadinessState(invoiceNumber);
+        const readinessChecks = readinessState.checks;
+        const readinessActionDisabled = readinessState.status !== 'pass';
         let toolkitMessage = invoiceNumber && storedMessage?.invoiceNumber === invoiceNumber
             ? storedMessage
             : null;
         const materialCleanupRunning = materialCleanup?.running === true;
-        const batchRunnerActive = runner?.running === true;
+        const batchRunnerActive = runner?.running === true && !isRunnerHeartbeatStale(runner);
         const disableForRunner = disabled => batchRunnerActive || disabled;
         const materialCleanupVisible = Boolean(
             materialCleanupRunning &&
@@ -3012,9 +3124,16 @@
             };
         }
 
-        const inQueue = invoiceNumber && queue.some(item => item.invoiceNumber === invoiceNumber);
+        let inQueue = invoiceNumber && queue.some(item => item.invoiceNumber === invoiceNumber);
         const stBatch = getServiceTitanBatchStatus();
         const batched = stBatch.found ? stBatch.isBatched : false;
+
+        if (invoiceNumber && batched && inQueue) {
+            removeInvoiceFromReviewQueue(invoiceNumber);
+            clearReviewedTabMarker();
+            queue = Store.getQueue();
+            inQueue = false;
+        }
 
         const badMaterialRows = getBadMaterialRows();
         const badMaterialsCount = badMaterialRows.length;
@@ -3025,6 +3144,11 @@
             badMaterialsCount === 0 &&
             toolkitMessage?.message === 'Stopped. Could not find delete button inside material row.'
         ) {
+            Store.clearMessage();
+            toolkitMessage = null;
+        }
+
+        if (readinessState.status === 'pass' && isReadinessBlockerMessage(toolkitMessage?.message)) {
             Store.clearMessage();
             toolkitMessage = null;
         }
@@ -3093,7 +3217,7 @@
                         }
                         ${buttonRow([
                             smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceNumber || badMaterialsCount === 0), 'st-btn-action'),
-                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessBlocked || !invoiceNumber || badMaterialsCount === 0), 'st-btn-success')
+                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || !invoiceNumber || badMaterialsCount === 0), 'st-btn-success')
                         ])}
                     </div>
                 ` : ''}
@@ -3102,7 +3226,7 @@
                 ${sections.queue ? `
                     <div class="st-card">
                         ${buttonRow([
-                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessBlocked || !invoiceNumber), 'st-btn-success'),
+                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || !invoiceNumber), 'st-btn-success'),
                             smallButton('st-remove-reviewed-btn', 'Remove', disableForRunner(!invoiceNumber), 'st-btn-secondary')
                         ])}
                         ${buttonRow([
@@ -3127,7 +3251,7 @@
                             smallButton('st-clear-active-batch-btn', 'Clear Batch', disableForRunner(false), 'st-btn-muted')
                         ])}
                         ${buttonRow([
-                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessBlocked || !activeBatch || !invoiceNumber), 'st-btn-success'),
+                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessActionDisabled || !activeBatch || !invoiceNumber), 'st-btn-success'),
                             smallButton('st-batch-reviewed-queue-btn', 'Batch Queue', disableForRunner(!activeBatch || !invoiceNumber), 'st-btn-purple')
                         ])}
                     </div>
