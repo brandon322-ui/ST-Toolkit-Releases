@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.10
+// @version      1.0.13
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.10 loaded\nBuilt: 2026-07-07T16:18:38.386Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.13 loaded\nBuilt: 2026-07-07T16:38:36.207Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -974,6 +974,32 @@
 
     function isRenderedInvoice(invoiceNumber) {
         return Boolean(invoiceNumber) && getRenderedInvoiceNumber() === invoiceNumber;
+    }
+
+    function getInvoiceContextState(expectedInvoiceNumber = getInvoiceNumber()) {
+        const invoiceNumber = getInvoiceNumber();
+        const renderedInvoiceNumber = getRenderedInvoiceNumber();
+
+        return {
+            invoiceNumber,
+            expectedInvoiceNumber,
+            renderedInvoiceNumber,
+            stable: Boolean(
+                invoiceNumber &&
+                renderedInvoiceNumber &&
+                invoiceNumber === renderedInvoiceNumber &&
+                (!expectedInvoiceNumber || expectedInvoiceNumber === invoiceNumber)
+            )
+        };
+    }
+
+    function getCurrentStableInvoiceNumber() {
+        const context = getInvoiceContextState();
+        return context.stable ? context.invoiceNumber : null;
+    }
+
+    function isInvoiceContextStable(invoiceNumber = getInvoiceNumber()) {
+        return getInvoiceContextState(invoiceNumber).stable;
     }
 
     function getServiceTitanBatchStatus() {
@@ -1960,6 +1986,30 @@
     }
 
     const OperationalReadiness = {
+        waitingChecks: () => [
+            {
+                id: 'payment-collected',
+                label: 'Payment Collected',
+                status: 'unknown',
+                displayText: 'Waiting for invoice page to finish loading...',
+                isBlocker: false
+            },
+            {
+                id: 'po-total-valid',
+                label: 'PO Total Valid',
+                status: 'unknown',
+                displayText: 'Waiting for invoice page to finish loading...',
+                isBlocker: false
+            },
+            {
+                id: 'business-unit-location',
+                label: 'Business Unit',
+                status: 'unknown',
+                displayText: 'Waiting for invoice page to finish loading...',
+                isBlocker: false
+            }
+        ],
+
         unknownChecks: (businessUnitSource = {}) => [
             {
                 id: 'payment-collected',
@@ -2188,6 +2238,19 @@
     };
 
     function getOperationalReadinessState(invoiceNumber = getInvoiceNumber()) {
+        const invoiceContext = getInvoiceContextState(invoiceNumber);
+
+        if (!invoiceContext.stable) {
+            return {
+                status: 'loading',
+                checks: OperationalReadiness.waitingChecks(),
+                blockers: [],
+                loading: true,
+                waitingForStableInvoice: true,
+                invoiceContext
+            };
+        }
+
         return OperationalReadiness.getState(
             invoiceNumber,
             getBusinessUnitReadinessSourceFromDom()
@@ -2196,6 +2259,10 @@
 
     function refreshOperationalReadinessIfNeeded(invoiceNumber) {
         if (!invoiceNumber) return;
+        if (!isInvoiceContextStable(invoiceNumber)) {
+            if (readinessFetchState?.invoiceNumber !== invoiceNumber) readinessFetchState = null;
+            return;
+        }
 
         const businessUnitSource = getBusinessUnitReadinessSourceFromDom();
         const cachedReadiness = Store.getOperationalReadiness();
@@ -2626,9 +2693,10 @@
 
         if (!invoiceNumber) throw new Error('Could not find invoice number.');
         if (!activeBatch?.batchName) throw new Error('No Active Batch set.');
-        if (!isRenderedInvoice(invoiceNumber)) {
+        const invoiceContext = getInvoiceContextState(invoiceNumber);
+        if (!invoiceContext.stable) {
             throw new Error(
-                `Invoice page has not finished loading invoice ${invoiceNumber}. Rendered invoice: ${getRenderedInvoiceNumber() || 'unknown'}.`
+                `Invoice page has not finished loading invoice ${invoiceNumber}. URL invoice: ${invoiceContext.invoiceNumber || 'unknown'}. Rendered invoice: ${invoiceContext.renderedInvoiceNumber || 'unknown'}.`
             );
         }
 
@@ -2832,8 +2900,7 @@
     }
 
     function isBatchRunnerInvoiceReady(invoiceNumber) {
-        if (getInvoiceNumber() !== invoiceNumber) return null;
-        if (!isRenderedInvoice(invoiceNumber)) return null;
+        if (!isInvoiceContextStable(invoiceNumber)) return null;
 
         const status = getServiceTitanBatchStatus();
         return status.found && status.isBatched ? status : findAddToBatchButton();
@@ -2866,7 +2933,7 @@
                     () => isBatchRunnerInvoiceReady(invoiceNumber),
                     {
                         timeout: 60000,
-                        message: 'Timed out waiting for invoice page actions to load.'
+                        message: `Timed out waiting for invoice ${invoiceNumber} page context to stabilize.`
                     }
                 );
 
@@ -3102,6 +3169,7 @@
         const storedMessage = Store.getMessage();
         const materialCleanup = Store.getMaterialCleanup();
         const sections = Store.getSections();
+        const invoiceContext = getInvoiceContextState(invoiceNumber);
         const readinessState = getOperationalReadinessState(invoiceNumber);
         const readinessChecks = readinessState.checks;
         const readinessActionDisabled = readinessState.status !== 'pass';
@@ -3125,7 +3193,9 @@
         }
 
         let inQueue = invoiceNumber && queue.some(item => item.invoiceNumber === invoiceNumber);
-        const stBatch = getServiceTitanBatchStatus();
+        const stBatch = invoiceContext.stable
+            ? getServiceTitanBatchStatus()
+            : { found: false, isBatched: false };
         const batched = stBatch.found ? stBatch.isBatched : false;
 
         if (invoiceNumber && batched && inQueue) {
@@ -3287,6 +3357,15 @@
         lastRouteKey = currentRouteKey;
         manualLauncherOpen = false;
         lastProcessedInvoice = null;
+
+        const currentInvoiceNumber = getInvoiceNumber();
+        const cachedReadiness = Store.getOperationalReadiness();
+        if (cachedReadiness?.invoiceNumber && cachedReadiness.invoiceNumber !== currentInvoiceNumber) {
+            Store.clearOperationalReadiness();
+        }
+        if (readinessFetchState?.invoiceNumber && readinessFetchState.invoiceNumber !== currentInvoiceNumber) {
+            readinessFetchState = null;
+        }
 
         if (!isInvoicePage()) {
             toolkitClosed = true;
