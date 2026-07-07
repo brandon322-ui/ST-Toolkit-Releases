@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.15
+// @version      1.0.17
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.15 loaded\nBuilt: 2026-07-07T16:41:53.091Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.17 loaded\nBuilt: 2026-07-07T18:04:17.397Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -944,12 +944,12 @@
         return getPageType() === 'invoice';
     }
 
-    function getInvoiceNumber() {
+    function getInvoiceId() {
         const match = (window.location.hash || '').match(/invoice\/(\d+)/i);
         return match ? match[1] : null;
     }
 
-    function getRenderedInvoiceNumber() {
+    function getDisplayedInvoiceNumber() {
         const selectors = [
             'h1',
             'h2',
@@ -972,34 +972,33 @@
         return bodyMatch ? bodyMatch[1] : null;
     }
 
-    function isRenderedInvoice(invoiceNumber) {
-        return Boolean(invoiceNumber) && getRenderedInvoiceNumber() === invoiceNumber;
+    function getInvoiceDisplayLabel(invoiceId = getInvoiceId()) {
+        const displayedInvoiceNumber = getDisplayedInvoiceNumber();
+        return displayedInvoiceNumber || invoiceId || 'Unknown';
     }
 
-    function getInvoiceContextState(expectedInvoiceNumber = getInvoiceNumber()) {
-        const invoiceNumber = getInvoiceNumber();
-        const renderedInvoiceNumber = getRenderedInvoiceNumber();
+    function getInvoiceContextState(expectedInvoiceId = getInvoiceId()) {
+        const invoiceId = getInvoiceId();
+        const displayedInvoiceNumber = getDisplayedInvoiceNumber();
 
         return {
-            invoiceNumber,
-            expectedInvoiceNumber,
-            renderedInvoiceNumber,
+            invoiceId,
+            expectedInvoiceId,
+            displayedInvoiceNumber,
             stable: Boolean(
-                invoiceNumber &&
-                renderedInvoiceNumber &&
-                invoiceNumber === renderedInvoiceNumber &&
-                (!expectedInvoiceNumber || expectedInvoiceNumber === invoiceNumber)
+                invoiceId &&
+                (!expectedInvoiceId || expectedInvoiceId === invoiceId)
             )
         };
     }
 
-    function getCurrentStableInvoiceNumber() {
+    function getCurrentStableInvoiceId() {
         const context = getInvoiceContextState();
-        return context.stable ? context.invoiceNumber : null;
+        return context.stable ? context.invoiceId : null;
     }
 
-    function isInvoiceContextStable(invoiceNumber = getInvoiceNumber()) {
-        return getInvoiceContextState(invoiceNumber).stable;
+    function isInvoiceContextStable(invoiceId = getInvoiceId()) {
+        return getInvoiceContextState(invoiceId).stable;
     }
 
     function getServiceTitanBatchStatus() {
@@ -1162,10 +1161,14 @@
                 .filter(check => check.id && check.label && check.displayText)
             : [];
 
-        return {
-            invoiceNumber: typeof readiness.invoiceNumber === 'string' && /^\d+$/.test(readiness.invoiceNumber)
+        const invoiceId = typeof readiness.invoiceId === 'string' && /^\d+$/.test(readiness.invoiceId)
+            ? readiness.invoiceId
+            : (typeof readiness.invoiceNumber === 'string' && /^\d+$/.test(readiness.invoiceNumber)
                 ? readiness.invoiceNumber
-                : null,
+                : null);
+
+        return {
+            invoiceId,
             checks,
             at: typeof readiness.at === 'string' ? readiness.at : null
         };
@@ -1194,7 +1197,7 @@
         getMessage: () => safeParse(TOOLKIT_MESSAGE_KEY, null),
         setMessage: message => localStorage.setItem(TOOLKIT_MESSAGE_KEY, JSON.stringify({
             message,
-            invoiceNumber: getInvoiceNumber(),
+            invoiceId: getInvoiceId(),
             at: new Date().toISOString()
         })),
         clearMessage: () => localStorage.removeItem(TOOLKIT_MESSAGE_KEY),
@@ -1225,16 +1228,16 @@
     }
 
     function markReviewedTab() {
-        const invoiceNumber = getInvoiceNumber();
-        if (!invoiceNumber) return;
+        const invoiceId = getInvoiceId();
+        if (!invoiceId) return;
 
-        sessionStorage.setItem(REVIEWED_TAB_MARKER_KEY, invoiceNumber);
+        sessionStorage.setItem(REVIEWED_TAB_MARKER_KEY, invoiceId);
         applyReviewedTabMarker();
     }
 
     function applyReviewedTabMarker() {
         const reviewedInvoice = sessionStorage.getItem(REVIEWED_TAB_MARKER_KEY);
-        const shouldMark = reviewedInvoice && reviewedInvoice === getInvoiceNumber();
+        const shouldMark = reviewedInvoice && reviewedInvoice === getInvoiceId();
 
         if (shouldMark && !document.title.startsWith('✅ ')) {
             document.title = `✅ ${document.title}`;
@@ -1841,10 +1844,10 @@
         return headers;
     }
 
-    async function fetchInvoiceData(invoiceNumber = getInvoiceNumber()) {
-        if (!invoiceNumber) throw new Error('Could not find invoice number.');
+    async function fetchInvoiceData(invoiceId = getInvoiceId()) {
+        if (!invoiceId) throw new Error('Could not find invoice id.');
 
-        const response = await fetch(`/Invoice?id=${encodeURIComponent(invoiceNumber)}&_=${Date.now()}`, {
+        const response = await fetch(`/Invoice?id=${encodeURIComponent(invoiceId)}&_=${Date.now()}`, {
             credentials: 'same-origin',
             headers: getServiceTitanHeaders()
         });
@@ -2144,14 +2147,14 @@
                 };
         },
 
-        getCachedChecks(invoiceNumber, businessUnitSource = {}) {
+        getCachedChecks(invoiceId, businessUnitSource = {}) {
             const readiness = Store.getOperationalReadiness();
             const requiredCheckIds = this.unknownChecks().map(check => check.id);
             const hasAllChecks = requiredCheckIds.every(id =>
                 readiness?.checks?.some(check => check.id === id)
             );
 
-            return readiness?.invoiceNumber === invoiceNumber && hasAllChecks
+            return readiness?.invoiceId === invoiceId && hasAllChecks
                 ? readiness.checks
                 : this.unknownChecks(businessUnitSource);
         },
@@ -2166,14 +2169,14 @@
                 .filter(check => check.status !== 'pass');
         },
 
-        getState(invoiceNumber, businessUnitSource = {}) {
+        getState(invoiceId, businessUnitSource = {}) {
             const checkingChecks = this.unknownChecks(businessUnitSource)
                 .map(check => ({
                     ...check,
                     displayText: `${check.label}: Checking...`
                 }));
 
-            if (!invoiceNumber) {
+            if (!invoiceId) {
                 return {
                     status: 'loading',
                     checks: checkingChecks,
@@ -2189,12 +2192,12 @@
                 readiness?.checks?.some(check => check.id === id)
             );
             const cacheFresh =
-                readiness?.invoiceNumber === invoiceNumber &&
+                readiness?.invoiceId === invoiceId &&
                 hasAllChecks &&
                 Number.isFinite(cachedAt) &&
                 Date.now() - cachedAt < OPERATIONAL_READINESS_CACHE_MS;
             const inFlight =
-                readinessFetchState?.invoiceNumber === invoiceNumber &&
+                readinessFetchState?.invoiceId === invoiceId &&
                 readinessFetchState.inFlight;
 
             if (!cacheFresh) {
@@ -2237,66 +2240,56 @@
         }
     };
 
-    function getOperationalReadinessState(invoiceNumber = getInvoiceNumber()) {
-        const invoiceContext = getInvoiceContextState(invoiceNumber);
-
-        if (!invoiceContext.stable) {
-            return {
-                status: 'loading',
-                checks: OperationalReadiness.waitingChecks(),
-                blockers: [],
-                loading: true,
-                waitingForStableInvoice: true,
-                invoiceContext
-            };
-        }
-
+    function getOperationalReadinessState(invoiceId = getInvoiceId()) {
         return OperationalReadiness.getState(
-            invoiceNumber,
+            invoiceId,
             getBusinessUnitReadinessSourceFromDom()
         );
     }
 
-    function refreshOperationalReadinessIfNeeded(invoiceNumber) {
-        if (!invoiceNumber) return;
-        if (!isInvoiceContextStable(invoiceNumber)) {
-            if (readinessFetchState?.invoiceNumber !== invoiceNumber) readinessFetchState = null;
-            return;
-        }
+    function refreshOperationalReadinessIfNeeded(invoiceId) {
+        if (!invoiceId) return;
 
         const businessUnitSource = getBusinessUnitReadinessSourceFromDom();
         const cachedReadiness = Store.getOperationalReadiness();
         const cachedAt = Date.parse(cachedReadiness?.at || '');
         if (
-            cachedReadiness?.invoiceNumber === invoiceNumber &&
+            cachedReadiness?.invoiceId === invoiceId &&
             cachedReadiness.checks.length &&
             Number.isFinite(cachedAt) &&
             Date.now() - cachedAt < OPERATIONAL_READINESS_CACHE_MS
         ) {
             return;
         }
-        if (readinessFetchState?.invoiceNumber === invoiceNumber && readinessFetchState.inFlight) return;
+        if (readinessFetchState?.invoiceId === invoiceId && readinessFetchState.inFlight) return;
 
-        readinessFetchState = { invoiceNumber, inFlight: true };
+        readinessFetchState = { invoiceId, inFlight: true };
 
-        fetchInvoiceData(invoiceNumber)
+        fetchInvoiceData(invoiceId)
             .then(invoiceData => {
+                const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
+                    ? String(invoiceData.Id)
+                    : null;
+                const checks = invoiceDataId === invoiceId
+                    ? OperationalReadiness.evaluate(invoiceData, businessUnitSource)
+                    : OperationalReadiness.unknownChecks(businessUnitSource);
+
                 Store.saveOperationalReadiness({
-                    invoiceNumber,
-                    checks: OperationalReadiness.evaluate(invoiceData, businessUnitSource),
+                    invoiceId,
+                    checks,
                     at: new Date().toISOString()
                 });
             })
             .catch(() => {
                 Store.saveOperationalReadiness({
-                    invoiceNumber,
+                    invoiceId,
                     checks: OperationalReadiness.unknownChecks(businessUnitSource),
                     at: new Date().toISOString()
                 });
             })
             .finally(() => {
                 readinessFetchState = null;
-                if (getInvoiceNumber() === invoiceNumber) createBox();
+                if (getInvoiceId() === invoiceId) createBox();
             });
     }
 
@@ -2338,8 +2331,8 @@
             .filter(isBadMaterial);
     }
 
-    async function fetchBadMaterials(invoiceNumber = getInvoiceNumber()) {
-        return getBadMaterialsFromInvoice(await fetchInvoiceData(invoiceNumber));
+    async function fetchBadMaterials(invoiceId = getInvoiceId()) {
+        return getBadMaterialsFromInvoice(await fetchInvoiceData(invoiceId));
     }
 
     async function deleteMaterialById(materialId) {
@@ -2451,13 +2444,13 @@
                 };
             }
 
-            const invoiceNumber = getInvoiceNumber();
+            const invoiceId = getInvoiceId();
             const reloadAfter = options.reloadAfter !== false;
-            setMaterialCleanupProgress({ invoiceNumber });
+            setMaterialCleanupProgress({ invoiceNumber: invoiceId });
 
-            const startBadMaterials = await fetchBadMaterials(invoiceNumber);
+            const startBadMaterials = await fetchBadMaterials(invoiceId);
             const startCount = startBadMaterials.length;
-            setMaterialCleanupProgress({ invoiceNumber, deleted: 0, total: startCount });
+            setMaterialCleanupProgress({ invoiceNumber: invoiceId, deleted: 0, total: startCount });
 
             if (startCount === 0) {
                 Store.clearMaterialCleanup();
@@ -2470,19 +2463,19 @@
             let attempts = 0;
 
             while (attempts < startCount + 10) {
-                const badMaterials = await fetchBadMaterials(invoiceNumber);
+                const badMaterials = await fetchBadMaterials(invoiceId);
                 const nextMaterial = badMaterials[0];
 
                 if (!nextMaterial) break;
 
                 await deleteMaterialById(nextMaterial.Id);
-                await waitForMaterialDeleted(nextMaterial.Id, invoiceNumber);
+                await waitForMaterialDeleted(nextMaterial.Id, invoiceId);
                 deleted++;
                 attempts++;
-                setMaterialCleanupProgress({ invoiceNumber, deleted, total: startCount });
+                setMaterialCleanupProgress({ invoiceNumber: invoiceId, deleted, total: startCount });
             }
 
-            const remaining = (await fetchBadMaterials(invoiceNumber)).length;
+            const remaining = (await fetchBadMaterials(invoiceId)).length;
             Store.clearMaterialCleanup();
 
             if (!silent) {
@@ -2522,21 +2515,21 @@
     }
 
     function markReviewed(showMessage = true) {
-        const invoiceNumber = getInvoiceNumber();
+        const invoiceId = getInvoiceId();
 
-        if (!invoiceNumber) {
-            setToolkitMessage('Could not find invoice number.');
+        if (!invoiceId) {
+            setToolkitMessage('Could not find invoice id.');
             createBox();
             return false;
         }
 
         if (isCurrentlyBatchedInServiceTitan()) {
-            setToolkitMessage(`Invoice ${invoiceNumber} is already batched in ServiceTitan.`);
+            setToolkitMessage(`Invoice ${invoiceId} is already batched in ServiceTitan.`);
             createBox();
             return false;
         }
 
-        const readinessState = getOperationalReadinessState(invoiceNumber);
+        const readinessState = getOperationalReadinessState(invoiceId);
 
         if (readinessState.status === 'loading') {
             setToolkitMessage('Cannot mark reviewed while readiness checks are still loading.');
@@ -2552,9 +2545,9 @@
 
         const queue = Store.getQueue();
 
-        if (!isInQueue(invoiceNumber)) {
+        if (!isInQueue(invoiceId)) {
             queue.push({
-                invoiceNumber,
+                invoiceNumber: invoiceId,
                 url: cleanInvoiceUrl(window.location.href),
                 reviewedAt: new Date().toISOString()
             });
@@ -2563,17 +2556,17 @@
 
         markReviewedTab();
 
-        if (showMessage) setToolkitMessage(`Invoice ${invoiceNumber} marked reviewed.`);
+        if (showMessage) setToolkitMessage(`Invoice ${invoiceId} marked reviewed.`);
         createBox();
         return true;
     }
 
     function removeFromQueue() {
-        const invoiceNumber = getInvoiceNumber();
-        if (!invoiceNumber) return;
+        const invoiceId = getInvoiceId();
+        if (!invoiceId) return;
 
-        removeInvoiceFromReviewQueue(invoiceNumber);
-        setToolkitMessage(`Invoice ${invoiceNumber} removed from reviewed queue.`);
+        removeInvoiceFromReviewQueue(invoiceId);
+        setToolkitMessage(`Invoice ${invoiceId} removed from reviewed queue.`);
         createBox();
     }
 
@@ -2687,21 +2680,21 @@
     }
 
     async function batchCurrentInvoiceSilently(options = {}) {
-        const invoiceNumber = getInvoiceNumber();
+        const invoiceId = getInvoiceId();
         const activeBatch = Store.getActiveBatch();
         const skipReadinessCheck = options.skipReadinessCheck === true;
 
-        if (!invoiceNumber) throw new Error('Could not find invoice number.');
+        if (!invoiceId) throw new Error('Could not find invoice id.');
         if (!activeBatch?.batchName) throw new Error('No Active Batch set.');
-        const invoiceContext = getInvoiceContextState(invoiceNumber);
+        const invoiceContext = getInvoiceContextState(invoiceId);
         if (!invoiceContext.stable) {
             throw new Error(
-                `Invoice page has not finished loading invoice ${invoiceNumber}. URL invoice: ${invoiceContext.invoiceNumber || 'unknown'}. Rendered invoice: ${invoiceContext.renderedInvoiceNumber || 'unknown'}.`
+                `Invoice page has not finished loading invoice ${invoiceId}. URL invoice: ${invoiceContext.invoiceId || 'unknown'}. Displayed invoice number: ${invoiceContext.displayedInvoiceNumber || 'unknown'}.`
             );
         }
 
         if (!skipReadinessCheck) {
-            const readinessState = getOperationalReadinessState(invoiceNumber);
+            const readinessState = getOperationalReadinessState(invoiceId);
 
             if (readinessState.status === 'loading') {
                 throw new Error('Cannot batch while readiness checks are still loading.');
@@ -2713,9 +2706,9 @@
         }
 
         if (isCurrentlyBatchedInServiceTitan()) {
-            removeInvoiceFromReviewQueue(invoiceNumber);
+            removeInvoiceFromReviewQueue(invoiceId);
             clearReviewedTabMarker();
-            return { skipped: true, invoiceNumber };
+            return { skipped: true, invoiceNumber: invoiceId };
         }
 
         const addButton = findAddToBatchButton();
@@ -2773,11 +2766,11 @@
             throw new Error('Save was clicked, but ServiceTitan still shows this invoice as Unbatched.');
         }
 
-        removeInvoiceFromReviewQueue(invoiceNumber);
+        removeInvoiceFromReviewQueue(invoiceId);
         document.title = `✅ Batched - ${document.title}`;
         clearReviewedTabMarker();
 
-        return { success: true, invoiceNumber };
+        return { success: true, invoiceNumber: invoiceId };
     }
 
     async function batchCurrentInvoiceManual() {
@@ -2917,44 +2910,44 @@
         }
         if (runner.ownerTabId !== TAB_ID) return;
 
-        const invoiceNumber = getInvoiceNumber();
-        if (!invoiceNumber) return;
-        if (!runner.remaining.includes(invoiceNumber)) return;
-        if (lastProcessedInvoice === invoiceNumber) return;
+        const invoiceId = getInvoiceId();
+        if (!invoiceId) return;
+        if (!runner.remaining.includes(invoiceId)) return;
+        if (lastProcessedInvoice === invoiceId) return;
 
         runnerBusy = true;
         try {
-            runner.currentInvoice = invoiceNumber;
+            runner.currentInvoice = invoiceId;
             Store.saveRunner(stampRunnerHeartbeat(runner));
             createBox();
 
             try {
                 await waitForCondition(
-                    () => isBatchRunnerInvoiceReady(invoiceNumber),
+                    () => isBatchRunnerInvoiceReady(invoiceId),
                     {
                         timeout: 60000,
-                        message: `Timed out waiting for invoice ${invoiceNumber} page context to stabilize.`
+                        message: `Timed out waiting for invoice ${invoiceId} page context to stabilize.`
                     }
                 );
 
-                lastProcessedInvoice = invoiceNumber;
+                lastProcessedInvoice = invoiceId;
                 const batchResult = await batchCurrentInvoiceSilently({ skipReadinessCheck: true });
 
                 const updated = Store.getRunner();
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
 
                 if (!batchResult.skipped) {
-                    updated.successes.push(invoiceNumber);
+                    updated.successes.push(invoiceId);
                 }
-                updated.remaining = updated.remaining.filter(n => n !== invoiceNumber);
+                updated.remaining = updated.remaining.filter(n => n !== invoiceId);
                 updated.currentInvoice = null;
                 Store.saveRunner(stampRunnerHeartbeat(updated));
             } catch (err) {
                 const updated = Store.getRunner();
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
 
-                updated.failures.push({ invoiceNumber, error: err.message });
-                updated.remaining = updated.remaining.filter(n => n !== invoiceNumber);
+                updated.failures.push({ invoiceNumber: invoiceId, error: err.message });
+                updated.remaining = updated.remaining.filter(n => n !== invoiceId);
                 updated.currentInvoice = null;
                 Store.saveRunner(stampRunnerHeartbeat(updated));
             }
@@ -3162,18 +3155,18 @@
         document.getElementById(TOOL_ID)?.remove();
         cleanupStaleRunner();
 
-        const invoiceNumber = getInvoiceNumber();
+        const invoiceId = getInvoiceId();
         let queue = Store.getQueue();
         const activeBatch = Store.getActiveBatch();
         const runner = Store.getRunner();
         const storedMessage = Store.getMessage();
         const materialCleanup = Store.getMaterialCleanup();
         const sections = Store.getSections();
-        const invoiceContext = getInvoiceContextState(invoiceNumber);
-        const readinessState = getOperationalReadinessState(invoiceNumber);
+        const invoiceContext = getInvoiceContextState(invoiceId);
+        const readinessState = getOperationalReadinessState(invoiceId);
         const readinessChecks = readinessState.checks;
         const readinessActionDisabled = readinessState.status !== 'pass';
-        let toolkitMessage = invoiceNumber && storedMessage?.invoiceNumber === invoiceNumber
+        let toolkitMessage = invoiceId && storedMessage?.invoiceId === invoiceId
             ? storedMessage
             : null;
         const materialCleanupRunning = materialCleanup?.running === true;
@@ -3181,25 +3174,25 @@
         const disableForRunner = disabled => batchRunnerActive || disabled;
         const materialCleanupVisible = Boolean(
             materialCleanupRunning &&
-            invoiceNumber &&
-            materialCleanup.invoiceNumber === invoiceNumber
+            invoiceId &&
+            materialCleanup.invoiceNumber === invoiceId
         );
 
         if (materialCleanupVisible) {
             toolkitMessage = {
                 message: materialCleanup.message || getMaterialCleanupMessage(materialCleanup.deleted, materialCleanup.total),
-                invoiceNumber
+                invoiceId
             };
         }
 
-        let inQueue = invoiceNumber && queue.some(item => item.invoiceNumber === invoiceNumber);
+        let inQueue = invoiceId && queue.some(item => item.invoiceNumber === invoiceId);
         const stBatch = invoiceContext.stable
             ? getServiceTitanBatchStatus()
             : { found: false, isBatched: false };
         const batched = stBatch.found ? stBatch.isBatched : false;
 
-        if (invoiceNumber && batched && inQueue) {
-            removeInvoiceFromReviewQueue(invoiceNumber);
+        if (invoiceId && batched && inQueue) {
+            removeInvoiceFromReviewQueue(invoiceId);
             clearReviewedTabMarker();
             queue = Store.getQueue();
             inQueue = false;
@@ -3244,12 +3237,12 @@
                 : '<span>Not Reviewed</span>';
 
         const runnerStatus = getRunnerStatusText(runner);
-        refreshOperationalReadinessIfNeeded(invoiceNumber);
+        refreshOperationalReadinessIfNeeded(invoiceId);
 
         box.innerHTML = `
             ${buildHeader(batchRunnerActive)}
             <div id="st-toolkit-body">
-                <div><strong>Invoice:</strong> ${invoiceNumber || 'Unknown'}</div>
+                <div><strong>Invoice:</strong> ${escapeHtml(getInvoiceDisplayLabel(invoiceId))}</div>
                 <div><strong>Status:</strong> ${reviewStatus}</div>
 
                 ${toolkitMessage?.message ? `<div class="st-msg">${escapeHtml(toolkitMessage.message)}</div>` : ''}
@@ -3286,8 +3279,8 @@
                             : `<div class="st-small">Materials clean ✓</div>`
                         }
                         ${buttonRow([
-                            smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceNumber || badMaterialsCount === 0), 'st-btn-action'),
-                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || !invoiceNumber || badMaterialsCount === 0), 'st-btn-success')
+                            smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceId || badMaterialsCount === 0), 'st-btn-action'),
+                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || !invoiceId || badMaterialsCount === 0), 'st-btn-success')
                         ])}
                     </div>
                 ` : ''}
@@ -3296,8 +3289,8 @@
                 ${sections.queue ? `
                     <div class="st-card">
                         ${buttonRow([
-                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || !invoiceNumber), 'st-btn-success'),
-                            smallButton('st-remove-reviewed-btn', 'Remove', disableForRunner(!invoiceNumber), 'st-btn-secondary')
+                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || !invoiceId), 'st-btn-success'),
+                            smallButton('st-remove-reviewed-btn', 'Remove', disableForRunner(!invoiceId), 'st-btn-secondary')
                         ])}
                         ${buttonRow([
                             smallButton('st-show-queue-btn', `Show Queue (${queue.length})`, disableForRunner(false), 'st-btn-primary'),
@@ -3317,12 +3310,12 @@
                 ${sections.batching ? `
                     <div class="st-card">
                         ${buttonRow([
-                            smallButton('st-set-active-batch-btn', 'Set Active Batch', disableForRunner(!invoiceNumber), 'st-btn-primary'),
+                            smallButton('st-set-active-batch-btn', 'Set Active Batch', disableForRunner(!invoiceId), 'st-btn-primary'),
                             smallButton('st-clear-active-batch-btn', 'Clear Batch', disableForRunner(false), 'st-btn-muted')
                         ])}
                         ${buttonRow([
-                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessActionDisabled || !activeBatch || !invoiceNumber), 'st-btn-success'),
-                            smallButton('st-batch-reviewed-queue-btn', 'Batch Queue', disableForRunner(!activeBatch || !invoiceNumber), 'st-btn-purple')
+                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessActionDisabled || !activeBatch || !invoiceId), 'st-btn-success'),
+                            smallButton('st-batch-reviewed-queue-btn', 'Batch Queue', disableForRunner(!activeBatch || !invoiceId), 'st-btn-purple')
                         ])}
                     </div>
                 ` : ''}
@@ -3358,12 +3351,12 @@
         manualLauncherOpen = false;
         lastProcessedInvoice = null;
 
-        const currentInvoiceNumber = getInvoiceNumber();
+        const currentInvoiceId = getInvoiceId();
         const cachedReadiness = Store.getOperationalReadiness();
-        if (cachedReadiness?.invoiceNumber && cachedReadiness.invoiceNumber !== currentInvoiceNumber) {
+        if (cachedReadiness?.invoiceId && cachedReadiness.invoiceId !== currentInvoiceId) {
             Store.clearOperationalReadiness();
         }
-        if (readinessFetchState?.invoiceNumber && readinessFetchState.invoiceNumber !== currentInvoiceNumber) {
+        if (readinessFetchState?.invoiceId && readinessFetchState.invoiceId !== currentInvoiceId) {
             readinessFetchState = null;
         }
 
