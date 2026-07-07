@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.19
+// @version      1.0.21
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.19 loaded\nBuilt: 2026-07-07T19:32:03.231Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.21 loaded\nBuilt: 2026-07-07T19:41:40.784Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -1154,7 +1154,7 @@
                 .map(check => ({
                     id: typeof check.id === 'string' ? check.id : '',
                     label: typeof check.label === 'string' ? check.label : '',
-                    status: ['pass', 'fail', 'unknown'].includes(check.status) ? check.status : 'unknown',
+                    status: ['loading', 'pass', 'blocked', 'error'].includes(check.status) ? check.status : 'error',
                     displayText: typeof check.displayText === 'string' ? check.displayText : '',
                     isBlocker: check.isBlocker === true
                 }))
@@ -2116,9 +2116,19 @@
             }
 
             const readiness = Store.getOperationalReadiness();
+            const hasMatchingInvoice = readiness?.invoiceId === invoiceId;
             const inFlight =
                 readinessFetchState?.invoiceId === invoiceId &&
                 readinessFetchState.inFlight;
+
+            if (!hasMatchingInvoice) {
+                return {
+                    status: 'loading',
+                    checks: this.buildLoadingChecks(businessUnitSource),
+                    blockers: [],
+                    loading: true
+                };
+            }
 
             if (inFlight) {
                 return {
@@ -3085,7 +3095,7 @@
 
     function readinessIcon(status) {
         if (status === 'pass') return '✅';
-        if (status === 'fail') return '❌';
+        if (status === 'blocked' || status === 'error') return '❌';
         return '⚪';
     }
 
