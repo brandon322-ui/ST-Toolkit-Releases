@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.31
+// @version      1.0.34
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.31 loaded\nBuilt: 2026-07-07T20:48:07.397Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.34 loaded\nBuilt: 2026-07-07T23:08:52.655Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -1009,13 +1009,20 @@
             return { found: false, isBatched: false };
         }
 
-        const statusText =
+        const rawStatusText =
             batchLabel.querySelector('.non-asterisk')?.innerText?.trim() ||
             batchLabel.innerText.replace('Batch', '').trim();
+        const statusText = String(rawStatusText || '').replace(/\s+/g, ' ').trim();
+        const statusLines = String(rawStatusText || '')
+            .split(/\n+/)
+            .map(line => line.trim())
+            .filter(Boolean);
+        const isUnbatched = statusLines.some(line => /^Unbatched$/i.test(line)) ||
+            /^Unbatched\b/i.test(statusText);
 
         return {
             found: true,
-            isBatched: statusText !== 'Unbatched'
+            isBatched: Boolean(statusText) && !isUnbatched
         };
     }
 
@@ -2617,6 +2624,7 @@
         const invoiceId = getInvoiceId();
         const activeBatch = Store.getActiveBatch();
         const skipReadinessCheck = options.skipReadinessCheck === true;
+        const preserveQueueUntilRunnerVerified = options.preserveQueueUntilRunnerVerified === true;
 
         if (!invoiceId) throw new Error('Could not find invoice id.');
         if (!activeBatch?.batchName) throw new Error('No Active Batch set.');
@@ -2704,9 +2712,11 @@
             throw new Error('Save was clicked, but ServiceTitan still shows this invoice as Unbatched.');
         }
 
-        removeInvoiceFromReviewQueue(invoiceId);
-        document.title = `✅ Batched - ${document.title}`;
-        clearReviewedTabMarker();
+        if (!preserveQueueUntilRunnerVerified) {
+            removeInvoiceFromReviewQueue(invoiceId);
+            document.title = `✅ Batched - ${document.title}`;
+            clearReviewedTabMarker();
+        }
 
         return { success: true, invoiceNumber: invoiceId };
     }
@@ -2837,6 +2847,26 @@
         return status.found && status.isBatched ? status : findAddToBatchButton();
     }
 
+    function verifyBatchRunnerInvoiceBatched(invoiceNumber) {
+        if (!isInvoiceContextStable(invoiceNumber)) {
+            throw new Error(`Invoice page changed before verifying invoice ${invoiceNumber} was batched.`);
+        }
+
+        const status = getServiceTitanBatchStatus();
+        if (!status.found) {
+            throw new Error(`Could not verify ServiceTitan batch status for invoice ${invoiceNumber}.`);
+        }
+
+        if (!status.isBatched) {
+            throw new Error(`Invoice ${invoiceNumber} is still Unbatched after attempted batching.`);
+        }
+
+        removeInvoiceFromReviewQueue(invoiceNumber);
+        document.title = `✅ Batched - ${document.title}`;
+        clearReviewedTabMarker();
+        return status;
+    }
+
     async function continueBatchRunnerIfNeeded() {
         if (runnerBusy) return;
 
@@ -2869,7 +2899,11 @@
                 );
 
                 lastProcessedInvoice = invoiceId;
-                const batchResult = await batchCurrentInvoiceSilently({ skipReadinessCheck: true });
+                const batchResult = await batchCurrentInvoiceSilently({
+                    skipReadinessCheck: true,
+                    preserveQueueUntilRunnerVerified: true
+                });
+                verifyBatchRunnerInvoiceBatched(invoiceId);
 
                 const updated = Store.getRunner();
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
