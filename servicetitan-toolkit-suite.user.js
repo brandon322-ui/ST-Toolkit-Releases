@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.23
+// @version      1.0.25
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.23 loaded\nBuilt: 2026-07-07T19:57:13.683Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.25 loaded\nBuilt: 2026-07-07T20:23:43.949Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -908,6 +908,7 @@
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
     const OPERATIONAL_READINESS_CACHE_MS = 60000;
     const READINESS_CACHE_TTL_MS = 10 * 60 * 1000;
+    const READINESS_DEBUG = false;
     const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
 
     const TAB_ID = getTabId();
@@ -918,6 +919,7 @@
     let dragState = null;
     let lastRenderedBadMaterialsCount = null;
     let readinessFetchState = null;
+    const readinessMemoryCache = new Map();
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1217,8 +1219,23 @@
         clearMaterialCleanup: () => localStorage.removeItem(MATERIAL_CLEANUP_KEY),
 
         getOperationalReadiness: invoiceId => {
+            if (!invoiceId) return null;
+
+            const memoryEntry = readinessMemoryCache.get(invoiceId);
+            if (memoryEntry) {
+                if (READINESS_DEBUG) console.log('[readiness] read-memory', invoiceId, memoryEntry);
+                return memoryEntry;
+            }
+
             const cache = pruneOperationalReadinessCache(normalizeOperationalReadinessCache(safeParse(OPERATIONAL_READINESS_KEY, null)));
-            return invoiceId ? (cache[invoiceId] || null) : null;
+            const storageEntry = cache[invoiceId] || null;
+            if (storageEntry) {
+                readinessMemoryCache.set(invoiceId, storageEntry);
+                if (READINESS_DEBUG) console.log('[readiness] hydrate-memory', invoiceId, storageEntry);
+            }
+
+            if (READINESS_DEBUG) console.log('[readiness] read-storage', invoiceId, storageEntry);
+            return storageEntry;
         },
         saveOperationalReadiness: (invoiceId, readiness) => {
             if (!invoiceId) return;
@@ -1227,9 +1244,11 @@
             const entry = normalizeOperationalReadinessEntry(readiness, invoiceId);
             if (!entry?.invoiceId) return;
 
+            readinessMemoryCache.set(entry.invoiceId, entry);
             cache[entry.invoiceId] = entry;
             const nextCache = pruneOperationalReadinessCache(cache);
             localStorage.setItem(OPERATIONAL_READINESS_KEY, JSON.stringify(nextCache));
+            if (READINESS_DEBUG) console.log('[readiness] save', entry.invoiceId, entry);
         },
         clearOperationalReadiness: invoiceId => {
             if (!invoiceId) {
@@ -2174,6 +2193,8 @@
                 readinessFetchState?.invoiceId === invoiceId &&
                 readinessFetchState.inFlight;
 
+            if (READINESS_DEBUG) console.log('[readiness] getState', { invoiceId, readiness, inFlight, hasMatchingInvoice });
+
             if (!hasMatchingInvoice) {
                 return {
                     status: 'loading',
@@ -2283,14 +2304,18 @@
                         buildBusinessUnitCheck(businessUnitSource)
                     ];
 
-                Store.saveOperationalReadiness(invoiceId, {
+                const readiness = {
                     invoiceId,
                     checks,
                     at: new Date().toISOString()
-                });
+                };
+
+                Store.saveOperationalReadiness(invoiceId, readiness);
+                readinessFetchState = null;
+                setTimeout(createBox, 0);
             })
             .catch(err => {
-                Store.saveOperationalReadiness(invoiceId, {
+                const readiness = {
                     invoiceId,
                     checks: [
                         {
@@ -2310,10 +2335,16 @@
                         buildBusinessUnitCheck(businessUnitSource)
                     ],
                     at: new Date().toISOString()
-                });
+                };
+
+                Store.saveOperationalReadiness(invoiceId, readiness);
+                readinessFetchState = null;
+                setTimeout(createBox, 0);
             })
             .finally(() => {
-                readinessFetchState = null;
+                if (readinessFetchState?.invoiceId === invoiceId) {
+                    readinessFetchState = null;
+                }
                 if (getInvoiceId() === invoiceId) createBox();
             });
     }
