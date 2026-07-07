@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.21
+// @version      1.0.23
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.21 loaded\nBuilt: 2026-07-07T19:41:40.784Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.23 loaded\nBuilt: 2026-07-07T19:57:13.683Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -907,6 +907,7 @@
     };
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
     const OPERATIONAL_READINESS_CACHE_MS = 60000;
+    const READINESS_CACHE_TTL_MS = 10 * 60 * 1000;
     const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
 
     const TAB_ID = getTabId();
@@ -1145,7 +1146,7 @@
         };
     }
 
-    function normalizeOperationalReadiness(readiness) {
+    function normalizeOperationalReadinessEntry(readiness, invoiceId = null) {
         if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) return null;
 
         const checks = Array.isArray(readiness.checks)
@@ -1161,17 +1162,42 @@
                 .filter(check => check.id && check.label && check.displayText)
             : [];
 
-        const invoiceId = typeof readiness.invoiceId === 'string' && /^\d+$/.test(readiness.invoiceId)
+        const normalizedInvoiceId = typeof readiness.invoiceId === 'string' && /^\d+$/.test(readiness.invoiceId)
             ? readiness.invoiceId
             : (typeof readiness.invoiceNumber === 'string' && /^\d+$/.test(readiness.invoiceNumber)
                 ? readiness.invoiceNumber
                 : null);
 
         return {
-            invoiceId,
+            invoiceId: normalizedInvoiceId || invoiceId || null,
             checks,
             at: typeof readiness.at === 'string' ? readiness.at : null
         };
+    }
+
+    function normalizeOperationalReadinessCache(rawCache) {
+        if (!rawCache || typeof rawCache !== 'object' || Array.isArray(rawCache)) {
+            return {};
+        }
+
+        if (rawCache.checks || rawCache.invoiceId || rawCache.invoiceNumber || rawCache.at) {
+            const entry = normalizeOperationalReadinessEntry(rawCache, rawCache.invoiceId);
+            return entry?.invoiceId ? { [entry.invoiceId]: entry } : {};
+        }
+
+        return Object.fromEntries(Object.entries(rawCache).flatMap(([entryInvoiceId, entry]) => {
+            const normalizedEntry = normalizeOperationalReadinessEntry(entry, entryInvoiceId);
+            return normalizedEntry?.invoiceId ? [[normalizedEntry.invoiceId, normalizedEntry]] : [];
+        }));
+    }
+
+    function pruneOperationalReadinessCache(cache) {
+        const now = Date.now();
+        return Object.fromEntries(Object.entries(cache).filter(([, entry]) => {
+            if (!entry || typeof entry !== 'object') return false;
+            if (!entry.at) return true;
+            return now - Date.parse(entry.at) < READINESS_CACHE_TTL_MS;
+        }));
     }
 
     const Store = {
@@ -1190,9 +1216,36 @@
         saveMaterialCleanup: cleanup => localStorage.setItem(MATERIAL_CLEANUP_KEY, JSON.stringify(normalizeMaterialCleanup(cleanup))),
         clearMaterialCleanup: () => localStorage.removeItem(MATERIAL_CLEANUP_KEY),
 
-        getOperationalReadiness: () => normalizeOperationalReadiness(safeParse(OPERATIONAL_READINESS_KEY, null)),
-        saveOperationalReadiness: readiness => localStorage.setItem(OPERATIONAL_READINESS_KEY, JSON.stringify(normalizeOperationalReadiness(readiness))),
-        clearOperationalReadiness: () => localStorage.removeItem(OPERATIONAL_READINESS_KEY),
+        getOperationalReadiness: invoiceId => {
+            const cache = pruneOperationalReadinessCache(normalizeOperationalReadinessCache(safeParse(OPERATIONAL_READINESS_KEY, null)));
+            return invoiceId ? (cache[invoiceId] || null) : null;
+        },
+        saveOperationalReadiness: (invoiceId, readiness) => {
+            if (!invoiceId) return;
+
+            const cache = pruneOperationalReadinessCache(normalizeOperationalReadinessCache(safeParse(OPERATIONAL_READINESS_KEY, null)));
+            const entry = normalizeOperationalReadinessEntry(readiness, invoiceId);
+            if (!entry?.invoiceId) return;
+
+            cache[entry.invoiceId] = entry;
+            const nextCache = pruneOperationalReadinessCache(cache);
+            localStorage.setItem(OPERATIONAL_READINESS_KEY, JSON.stringify(nextCache));
+        },
+        clearOperationalReadiness: invoiceId => {
+            if (!invoiceId) {
+                localStorage.removeItem(OPERATIONAL_READINESS_KEY);
+                return;
+            }
+
+            const cache = pruneOperationalReadinessCache(normalizeOperationalReadinessCache(safeParse(OPERATIONAL_READINESS_KEY, null)));
+            delete cache[invoiceId];
+            const nextCache = pruneOperationalReadinessCache(cache);
+            if (Object.keys(nextCache).length) {
+                localStorage.setItem(OPERATIONAL_READINESS_KEY, JSON.stringify(nextCache));
+            } else {
+                localStorage.removeItem(OPERATIONAL_READINESS_KEY);
+            }
+        },
 
         getMessage: () => safeParse(TOOLKIT_MESSAGE_KEY, null),
         setMessage: message => localStorage.setItem(TOOLKIT_MESSAGE_KEY, JSON.stringify({
@@ -2115,7 +2168,7 @@
                 };
             }
 
-            const readiness = Store.getOperationalReadiness();
+            const readiness = Store.getOperationalReadiness(invoiceId);
             const hasMatchingInvoice = readiness?.invoiceId === invoiceId;
             const inFlight =
                 readinessFetchState?.invoiceId === invoiceId &&
@@ -2191,7 +2244,7 @@
         if (!invoiceId) return;
 
         const businessUnitSource = getBusinessUnitReadinessSourceFromDom();
-        const cachedReadiness = Store.getOperationalReadiness();
+        const cachedReadiness = Store.getOperationalReadiness(invoiceId);
         const cachedAt = Date.parse(cachedReadiness?.at || '');
         if (
             cachedReadiness?.invoiceId === invoiceId &&
@@ -2230,14 +2283,14 @@
                         buildBusinessUnitCheck(businessUnitSource)
                     ];
 
-                Store.saveOperationalReadiness({
+                Store.saveOperationalReadiness(invoiceId, {
                     invoiceId,
                     checks,
                     at: new Date().toISOString()
                 });
             })
             .catch(err => {
-                Store.saveOperationalReadiness({
+                Store.saveOperationalReadiness(invoiceId, {
                     invoiceId,
                     checks: [
                         {
@@ -3324,10 +3377,6 @@
         lastProcessedInvoice = null;
 
         const currentInvoiceId = getInvoiceId();
-        const cachedReadiness = Store.getOperationalReadiness();
-        if (cachedReadiness?.invoiceId && cachedReadiness.invoiceId !== currentInvoiceId) {
-            Store.clearOperationalReadiness();
-        }
         if (readinessFetchState?.invoiceId && readinessFetchState.invoiceId !== currentInvoiceId) {
             readinessFetchState = null;
         }
