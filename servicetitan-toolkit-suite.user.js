@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.38
+// @version      1.0.41
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.38 loaded\nBuilt: 2026-07-07T23:31:10.671Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.41 loaded\nBuilt: 2026-07-07T23:41:31.027Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -906,6 +906,7 @@
     };
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
     const READINESS_DEBUG = false;
+    const BATCH_QUEUE_DEBUG = false;
     const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
 
     const TAB_ID = getTabId();
@@ -1192,6 +1193,36 @@
         isDocked: () => localStorage.getItem(TOOLKIT_DOCKED_KEY) !== 'false',
         setDocked: value => localStorage.setItem(TOOLKIT_DOCKED_KEY, value ? 'true' : 'false')
     };
+
+    function getQueueInvoiceNumbers() {
+        return Store.getQueue().map(item => item.invoiceNumber);
+    }
+
+    function getRunnerDebugState(runner = Store.getRunner()) {
+        if (!runner) return null;
+
+        return {
+            running: runner.running === true,
+            ownerTabId: runner.ownerTabId,
+            currentInvoice: runner.currentInvoice,
+            remaining: [...(runner.remaining || [])],
+            successes: [...(runner.successes || [])],
+            failures: (runner.failures || []).map(failure => ({
+                invoiceNumber: failure.invoiceNumber,
+                error: failure.error
+            }))
+        };
+    }
+
+    function logBatchQueueDebug(event, details = {}) {
+        if (!BATCH_QUEUE_DEBUG && window.STInvoiceToolkitBatchQueueDebug !== true) return;
+
+        console.log('[invoice-toolkit][batch-queue]', event, {
+            ...details,
+            queue: getQueueInvoiceNumbers(),
+            runner: getRunnerDebugState()
+        });
+    }
 
     function setToolkitMessage(message) {
         Store.setMessage(message);
@@ -2511,8 +2542,15 @@
         createBox();
     }
 
-    function removeInvoiceFromReviewQueue(invoiceNumber) {
+    function removeInvoiceFromReviewQueue(invoiceNumber, reason = 'unspecified') {
+        const before = getQueueInvoiceNumbers();
         Store.saveQueue(Store.getQueue().filter(item => item.invoiceNumber !== invoiceNumber));
+        logBatchQueueDebug('queue-remove-invoice', {
+            invoiceId: invoiceNumber,
+            reason,
+            queueBefore: before,
+            queueAfter: getQueueInvoiceNumbers()
+        });
     }
 
     function clearQueue() {
@@ -2653,7 +2691,7 @@
 
         if (isCurrentlyBatchedInServiceTitan()) {
             if (!preserveQueueUntilRunnerVerified) {
-                removeInvoiceFromReviewQueue(invoiceId);
+                removeInvoiceFromReviewQueue(invoiceId, 'batch-current-already-batched');
                 clearReviewedTabMarker();
             }
             return { skipped: true, invoiceNumber: invoiceId };
@@ -2715,7 +2753,7 @@
         }
 
         if (!preserveQueueUntilRunnerVerified) {
-            removeInvoiceFromReviewQueue(invoiceId);
+            removeInvoiceFromReviewQueue(invoiceId, 'batch-current-verified-batched');
             document.title = `✅ Batched - ${document.title}`;
             clearReviewedTabMarker();
         }
@@ -2778,7 +2816,7 @@
 
         if (!confirm(`Batch ${queue.length} reviewed invoices into:\n\n${activeBatch.batchName}\n\nUse this tab as the runner?`)) return;
 
-        Store.saveRunner(stampRunnerHeartbeat({
+        const runner = stampRunnerHeartbeat({
             running: true,
             ownerTabId: TAB_ID,
             batchName: activeBatch.batchName,
@@ -2792,7 +2830,14 @@
             currentInvoice: null,
             startedAt: new Date().toISOString(),
             finishedAt: null
-        }));
+        });
+
+        Store.saveRunner(runner);
+        logBatchQueueDebug('runner-start', {
+            batchName: activeBatch.batchName,
+            queueAtStart: queue.map(item => item.invoiceNumber),
+            runnerStarted: getRunnerDebugState(runner)
+        });
 
         setToolkitMessage(`Batch runner started. ${queue.length} invoices queued.`);
         forceNavigate(queue[0].url);
@@ -2863,9 +2908,6 @@
             throw new Error(`Invoice ${invoiceNumber} is still Unbatched after attempted batching.`);
         }
 
-        removeInvoiceFromReviewQueue(invoiceNumber);
-        document.title = `✅ Batched - ${document.title}`;
-        clearReviewedTabMarker();
         return status;
     }
 
@@ -2873,18 +2915,48 @@
         const updated = Store.getRunner();
         if (!updated?.running || updated.ownerTabId !== TAB_ID) return false;
 
+        const queueBefore = getQueueInvoiceNumbers();
+        const statusBeforeVerification = getServiceTitanBatchStatus();
+
         try {
-            verifyBatchRunnerInvoiceBatched(invoiceId);
+            const verifiedStatus = verifyBatchRunnerInvoiceBatched(invoiceId);
+            removeInvoiceFromReviewQueue(invoiceId, batchResult?.skipped
+                ? 'batch-queue-verified-already-batched'
+                : 'batch-queue-verified-batched');
+            document.title = `✅ Batched - ${document.title}`;
+            clearReviewedTabMarker();
             if (!batchResult?.skipped) {
                 updated.successes.push(invoiceId);
             }
+            logBatchQueueDebug('invoice-verified-success', {
+                invoiceId,
+                batchResult,
+                statusBeforeVerification,
+                verifiedStatus,
+                queueBefore,
+                queueAfter: getQueueInvoiceNumbers(),
+                reason: batchResult?.skipped ? 'already verified batched' : 'verified batched after attempt'
+            });
         } catch (err) {
             updated.failures.push({ invoiceNumber: invoiceId, error: err.message });
+            logBatchQueueDebug('invoice-kept-failure', {
+                invoiceId,
+                batchResult,
+                statusBeforeVerification,
+                error: err.message,
+                queueBefore,
+                queueAfter: getQueueInvoiceNumbers(),
+                reason: 'not verified batched'
+            });
         }
 
         updated.remaining = updated.remaining.filter(n => n !== invoiceId);
         updated.currentInvoice = null;
         Store.saveRunner(stampRunnerHeartbeat(updated));
+        logBatchQueueDebug('invoice-finished', {
+            invoiceId,
+            runnerAfter: getRunnerDebugState(updated)
+        });
         return true;
     }
 
@@ -2911,6 +2983,14 @@
             createBox();
 
             try {
+                const statusBeforeAttempt = getServiceTitanBatchStatus();
+                logBatchQueueDebug('invoice-attempt-start', {
+                    invoiceId,
+                    queueBeforeAttempt: getQueueInvoiceNumbers(),
+                    statusBeforeAttempt,
+                    runnerBeforeAttempt: getRunnerDebugState(runner)
+                });
+
                 await waitForCondition(
                     () => isBatchRunnerInvoiceReady(invoiceId),
                     {
@@ -2924,15 +3004,33 @@
                     skipReadinessCheck: true,
                     preserveQueueUntilRunnerVerified: true
                 });
+                const statusAfterAttempt = getServiceTitanBatchStatus();
+                logBatchQueueDebug('invoice-attempt-result', {
+                    invoiceId,
+                    batchResult,
+                    statusBeforeAttempt,
+                    statusAfterAttempt,
+                    queueAfterAttemptBeforeVerification: getQueueInvoiceNumbers()
+                });
                 finishBatchRunnerInvoiceAttempt(invoiceId, batchResult);
             } catch (err) {
                 const updated = Store.getRunner();
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
 
+                const queueBeforeFailure = getQueueInvoiceNumbers();
                 updated.failures.push({ invoiceNumber: invoiceId, error: err.message });
                 updated.remaining = updated.remaining.filter(n => n !== invoiceId);
                 updated.currentInvoice = null;
                 Store.saveRunner(stampRunnerHeartbeat(updated));
+                logBatchQueueDebug('invoice-attempt-error', {
+                    invoiceId,
+                    error: err.message,
+                    queueBeforeFailure,
+                    queueAfterFailure: getQueueInvoiceNumbers(),
+                    statusAfterError: getServiceTitanBatchStatus(),
+                    runnerAfterFailure: getRunnerDebugState(updated),
+                    reason: 'attempt threw before verified batch removal'
+                });
             }
 
             const updatedRunner = Store.getRunner();
@@ -2968,6 +3066,11 @@
                 } else {
                     Store.clearRunner();
                 }
+                logBatchQueueDebug('runner-finish', {
+                    finishedRunner: getRunnerDebugState(updatedRunner),
+                    queueAtFinish: getQueueInvoiceNumbers(),
+                    clearedRunner: updatedRunner.failures.length === 0
+                });
                 createBox();
             }
         } finally {
@@ -3176,7 +3279,7 @@
         const batched = stBatch.found ? stBatch.isBatched : false;
 
         if (invoiceId && batched && inQueue) {
-            removeInvoiceFromReviewQueue(invoiceId);
+            removeInvoiceFromReviewQueue(invoiceId, 'render-verified-batched');
             clearReviewedTabMarker();
             queue = Store.getQueue();
             inQueue = false;
