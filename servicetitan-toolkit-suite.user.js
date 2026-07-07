@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.17
+// @version      1.0.19
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.17 loaded\nBuilt: 2026-07-07T18:04:17.397Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.19 loaded\nBuilt: 2026-07-07T19:32:03.231Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -1989,47 +1989,25 @@
     }
 
     const OperationalReadiness = {
-        waitingChecks: () => [
-            {
-                id: 'payment-collected',
-                label: 'Payment Collected',
-                status: 'unknown',
-                displayText: 'Waiting for invoice page to finish loading...',
-                isBlocker: false
-            },
-            {
-                id: 'po-total-valid',
-                label: 'PO Total Valid',
-                status: 'unknown',
-                displayText: 'Waiting for invoice page to finish loading...',
-                isBlocker: false
-            },
-            {
-                id: 'business-unit-location',
-                label: 'Business Unit',
-                status: 'unknown',
-                displayText: 'Waiting for invoice page to finish loading...',
-                isBlocker: false
-            }
-        ],
-
-        unknownChecks: (businessUnitSource = {}) => [
-            {
-                id: 'payment-collected',
-                label: 'Payment Collected',
-                status: 'unknown',
-                displayText: 'Payment: Needs Inspection',
-                isBlocker: false
-            },
-            {
-                id: 'po-total-valid',
-                label: 'PO Total Valid',
-                status: 'unknown',
-                displayText: 'PO: Needs Inspection',
-                isBlocker: false
-            },
-            buildBusinessUnitCheck(businessUnitSource)
-        ],
+        buildLoadingChecks(businessUnitSource = {}) {
+            return [
+                {
+                    id: 'payment-collected',
+                    label: 'Payment Collected',
+                    status: 'loading',
+                    displayText: 'Payment: Checking...',
+                    isBlocker: false
+                },
+                {
+                    id: 'po-total-valid',
+                    label: 'PO Total Valid',
+                    status: 'loading',
+                    displayText: 'PO: Checking...',
+                    isBlocker: false
+                },
+                buildBusinessUnitCheck(businessUnitSource)
+            ];
+        },
 
         evaluate(invoiceData, businessUnitSource = {}) {
             return [
@@ -2040,56 +2018,36 @@
         },
 
         evaluatePayment(invoiceData) {
-            // Inspected source: the ServiceTitan invoice view shows Invoice Summary
-            // Total and Balance; the same invoice payload is fetched from /Invoice?id=.
-            // A positive Total with Balance <= 0 means collection is satisfied, while
-            // Total <= 0 and Balance <= 0 means there is no collection needed.
-            const total = firstMoneyValue(invoiceData, ['Total', 'InvoiceTotal', 'GrandTotal']);
             const balance = firstMoneyValue(invoiceData, ['Balance', 'BalanceDue', 'AmountDue']);
 
-            if (total === null || balance === null) {
+            if (balance === null) {
                 return {
                     id: 'payment-collected',
                     label: 'Payment Collected',
-                    status: 'unknown',
-                    displayText: 'Payment: Needs Inspection',
+                    status: 'error',
+                    displayText: 'Payment: Balance missing or unparseable',
                     isBlocker: false
                 };
             }
 
-            if (total <= 0 && balance <= 0) {
-                return {
-                    id: 'payment-collected',
-                    label: 'Payment Collected',
-                    status: 'pass',
-                    displayText: 'No Payment Needed',
-                    isBlocker: false
-                };
-            }
-
-            if (balance <= 0) {
-                return {
+            return balance <= 0
+                ? {
                     id: 'payment-collected',
                     label: 'Payment Collected',
                     status: 'pass',
-                    displayText: 'Payment Collected',
+                    displayText: 'Payment: Balance <= 0',
                     isBlocker: false
+                }
+                : {
+                    id: 'payment-collected',
+                    label: 'Payment Collected',
+                    status: 'blocked',
+                    displayText: 'Payment: Balance > 0',
+                    isBlocker: true
                 };
-            }
-
-            return {
-                id: 'payment-collected',
-                label: 'Payment Collected',
-                status: 'fail',
-                displayText: 'Payment Not Collected',
-                isBlocker: true
-            };
         },
 
         evaluatePurchaseOrders(invoiceData) {
-            // Inspected source: the ServiceTitan invoice view renders a Purchase
-            // Orders table with an Amount column and Total row; the same invoice
-            // payload is fetched from /Invoice?id= and exposes PurchaseOrders.
             const purchaseOrders = Array.isArray(invoiceData?.PurchaseOrders)
                 ? invoiceData.PurchaseOrders
                 : null;
@@ -2098,8 +2056,8 @@
                 return {
                     id: 'po-total-valid',
                     label: 'PO Total Valid',
-                    status: 'unknown',
-                    displayText: 'PO: Needs Inspection',
+                    status: 'error',
+                    displayText: 'PO: PurchaseOrders missing or unparseable',
                     isBlocker: false
                 };
             }
@@ -2109,7 +2067,7 @@
                     id: 'po-total-valid',
                     label: 'PO Total Valid',
                     status: 'pass',
-                    displayText: 'No PO Present',
+                    displayText: 'PO: No purchase orders',
                     isBlocker: false
                 };
             }
@@ -2122,8 +2080,8 @@
                 return {
                     id: 'po-total-valid',
                     label: 'PO Total Valid',
-                    status: 'unknown',
-                    displayText: 'PO: Needs Inspection',
+                    status: 'error',
+                    displayText: 'PO: PO amount missing or unparseable',
                     isBlocker: false
                 };
             }
@@ -2135,92 +2093,64 @@
                     id: 'po-total-valid',
                     label: 'PO Total Valid',
                     status: 'pass',
-                    displayText: 'PO Total Valid',
+                    displayText: `PO: Total ${total.toFixed(2)}`,
                     isBlocker: false
                 }
                 : {
                     id: 'po-total-valid',
                     label: 'PO Total Valid',
-                    status: 'fail',
-                    displayText: 'PO Total Invalid',
+                    status: 'blocked',
+                    displayText: `PO: Total ${total.toFixed(2)}`,
                     isBlocker: true
                 };
         },
 
-        getCachedChecks(invoiceId, businessUnitSource = {}) {
-            const readiness = Store.getOperationalReadiness();
-            const requiredCheckIds = this.unknownChecks().map(check => check.id);
-            const hasAllChecks = requiredCheckIds.every(id =>
-                readiness?.checks?.some(check => check.id === id)
-            );
-
-            return readiness?.invoiceId === invoiceId && hasAllChecks
-                ? readiness.checks
-                : this.unknownChecks(businessUnitSource);
-        },
-
-        getBlockers(invoiceNumber) {
-            return this.getCachedChecks(invoiceNumber)
-                .filter(check => check.status === 'fail' && check.isBlocker);
-        },
-
-        getUnmetChecks(invoiceNumber, businessUnitSource = {}) {
-            return this.getCachedChecks(invoiceNumber, businessUnitSource)
-                .filter(check => check.status !== 'pass');
-        },
-
         getState(invoiceId, businessUnitSource = {}) {
-            const checkingChecks = this.unknownChecks(businessUnitSource)
-                .map(check => ({
-                    ...check,
-                    displayText: `${check.label}: Checking...`
-                }));
-
             if (!invoiceId) {
                 return {
                     status: 'loading',
-                    checks: checkingChecks,
+                    checks: this.buildLoadingChecks(businessUnitSource),
                     blockers: [],
                     loading: true
                 };
             }
 
             const readiness = Store.getOperationalReadiness();
-            const cachedAt = Date.parse(readiness?.at || '');
-            const requiredCheckIds = checkingChecks.map(check => check.id);
-            const hasAllChecks = requiredCheckIds.every(id =>
-                readiness?.checks?.some(check => check.id === id)
-            );
-            const cacheFresh =
-                readiness?.invoiceId === invoiceId &&
-                hasAllChecks &&
-                Number.isFinite(cachedAt) &&
-                Date.now() - cachedAt < OPERATIONAL_READINESS_CACHE_MS;
             const inFlight =
                 readinessFetchState?.invoiceId === invoiceId &&
                 readinessFetchState.inFlight;
 
-            if (!cacheFresh) {
+            if (inFlight) {
                 return {
                     status: 'loading',
-                    checks: checkingChecks,
+                    checks: this.buildLoadingChecks(businessUnitSource),
+                    blockers: [],
+                    loading: true
+                };
+            }
+
+            if (!readiness?.checks?.length) {
+                return {
+                    status: 'loading',
+                    checks: this.buildLoadingChecks(businessUnitSource),
                     blockers: [],
                     loading: true
                 };
             }
 
             const checks = readiness.checks;
+            const blockers = checks.filter(check => check.status === 'blocked' && check.isBlocker);
+            const errors = checks.filter(check => check.status === 'error');
 
-            if (inFlight || checks.some(check => check.status === 'unknown')) {
+            if (errors.length) {
                 return {
-                    status: 'loading',
-                    checks: checkingChecks,
-                    blockers: [],
-                    loading: true
+                    status: 'error',
+                    checks,
+                    blockers,
+                    loading: false,
+                    errors
                 };
             }
-
-            const blockers = checks.filter(check => check.status === 'fail' && check.isBlocker);
 
             if (blockers.length) {
                 return {
@@ -2272,7 +2202,23 @@
                     : null;
                 const checks = invoiceDataId === invoiceId
                     ? OperationalReadiness.evaluate(invoiceData, businessUnitSource)
-                    : OperationalReadiness.unknownChecks(businessUnitSource);
+                    : [
+                        {
+                            id: 'payment-collected',
+                            label: 'Payment Collected',
+                            status: 'error',
+                            displayText: 'Payment: Invoice ID mismatch',
+                            isBlocker: false
+                        },
+                        {
+                            id: 'po-total-valid',
+                            label: 'PO Total Valid',
+                            status: 'error',
+                            displayText: 'PO: Invoice ID mismatch',
+                            isBlocker: false
+                        },
+                        buildBusinessUnitCheck(businessUnitSource)
+                    ];
 
                 Store.saveOperationalReadiness({
                     invoiceId,
@@ -2280,10 +2226,26 @@
                     at: new Date().toISOString()
                 });
             })
-            .catch(() => {
+            .catch(err => {
                 Store.saveOperationalReadiness({
                     invoiceId,
-                    checks: OperationalReadiness.unknownChecks(businessUnitSource),
+                    checks: [
+                        {
+                            id: 'payment-collected',
+                            label: 'Payment Collected',
+                            status: 'error',
+                            displayText: `Payment: ${err?.message || 'fetch failed'}`,
+                            isBlocker: false
+                        },
+                        {
+                            id: 'po-total-valid',
+                            label: 'PO Total Valid',
+                            status: 'error',
+                            displayText: `PO: ${err?.message || 'fetch failed'}`,
+                            isBlocker: false
+                        },
+                        buildBusinessUnitCheck(businessUnitSource)
+                    ],
                     at: new Date().toISOString()
                 });
             })
