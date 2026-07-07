@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.6
+// @version      1.0.8
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.6 loaded\nBuilt: 2026-07-07T15:18:22.108Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.22\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.8 loaded\nBuilt: 2026-07-07T15:28:21.360Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.23\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.22';
+    const VERSION = '3.3.23';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -2104,6 +2104,11 @@
         getBlockers(invoiceNumber) {
             return this.getCachedChecks(invoiceNumber)
                 .filter(check => check.status === 'fail' && check.isBlocker);
+        },
+
+        getUnmetChecks(invoiceNumber, businessUnitSource = {}) {
+            return this.getCachedChecks(invoiceNumber, businessUnitSource)
+                .filter(check => check.status !== 'pass');
         }
     };
 
@@ -2370,9 +2375,12 @@
             return false;
         }
 
-        const operationalBlockers = OperationalReadiness.getBlockers(invoiceNumber);
+        const operationalBlockers = OperationalReadiness.getUnmetChecks(
+            invoiceNumber,
+            getBusinessUnitReadinessSourceFromDom()
+        );
         if (operationalBlockers.length) {
-            setToolkitMessage(`Cannot mark reviewed: ${operationalBlockers.map(check => check.displayText).join('; ')}.`);
+            setToolkitMessage(`Cannot mark reviewed until all readiness checks pass: ${operationalBlockers.map(check => check.displayText).join('; ')}.`);
             createBox();
             return false;
         }
@@ -2524,6 +2532,15 @@
                 `Invoice page has not finished loading invoice ${invoiceNumber}. Rendered invoice: ${getRenderedInvoiceNumber() || 'unknown'}.`
             );
         }
+
+        const operationalBlockers = OperationalReadiness.getUnmetChecks(
+            invoiceNumber,
+            getBusinessUnitReadinessSourceFromDom()
+        );
+        if (operationalBlockers.length) {
+            throw new Error(`Cannot batch until all readiness checks pass: ${operationalBlockers.map(check => check.displayText).join('; ')}.`);
+        }
+
         if (isCurrentlyBatchedInServiceTitan()) {
             removeInvoiceFromReviewQueue(invoiceNumber);
             clearReviewedTabMarker();
@@ -2975,6 +2992,7 @@
         const readinessChecks = invoiceNumber
             ? OperationalReadiness.getCachedChecks(invoiceNumber, businessUnitSource)
             : OperationalReadiness.unknownChecks(businessUnitSource);
+        const readinessBlocked = readinessChecks.some(check => check.status !== 'pass');
         let toolkitMessage = invoiceNumber && storedMessage?.invoiceNumber === invoiceNumber
             ? storedMessage
             : null;
@@ -3075,7 +3093,7 @@
                         }
                         ${buttonRow([
                             smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceNumber || badMaterialsCount === 0), 'st-btn-action'),
-                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || !invoiceNumber || badMaterialsCount === 0), 'st-btn-success')
+                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessBlocked || !invoiceNumber || badMaterialsCount === 0), 'st-btn-success')
                         ])}
                     </div>
                 ` : ''}
@@ -3084,7 +3102,7 @@
                 ${sections.queue ? `
                     <div class="st-card">
                         ${buttonRow([
-                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(!invoiceNumber), 'st-btn-success'),
+                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessBlocked || !invoiceNumber), 'st-btn-success'),
                             smallButton('st-remove-reviewed-btn', 'Remove', disableForRunner(!invoiceNumber), 'st-btn-secondary')
                         ])}
                         ${buttonRow([
@@ -3109,7 +3127,7 @@
                             smallButton('st-clear-active-batch-btn', 'Clear Batch', disableForRunner(false), 'st-btn-muted')
                         ])}
                         ${buttonRow([
-                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(!activeBatch || !invoiceNumber), 'st-btn-success'),
+                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessBlocked || !activeBatch || !invoiceNumber), 'st-btn-success'),
                             smallButton('st-batch-reviewed-queue-btn', 'Batch Queue', disableForRunner(!activeBatch || !invoiceNumber), 'st-btn-purple')
                         ])}
                     </div>
