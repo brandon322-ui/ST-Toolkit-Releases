@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.34
+// @version      1.0.36
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.34 loaded\nBuilt: 2026-07-07T23:08:52.655Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.36 loaded\nBuilt: 2026-07-07T23:19:22.682Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -1018,7 +1018,7 @@
             .map(line => line.trim())
             .filter(Boolean);
         const isUnbatched = statusLines.some(line => /^Unbatched$/i.test(line)) ||
-            /^Unbatched\b/i.test(statusText);
+            /\bUnbatched\b/i.test(statusText);
 
         return {
             found: true,
@@ -2652,8 +2652,10 @@
         }
 
         if (isCurrentlyBatchedInServiceTitan()) {
-            removeInvoiceFromReviewQueue(invoiceId);
-            clearReviewedTabMarker();
+            if (!preserveQueueUntilRunnerVerified) {
+                removeInvoiceFromReviewQueue(invoiceId);
+                clearReviewedTabMarker();
+            }
             return { skipped: true, invoiceNumber: invoiceId };
         }
 
@@ -2867,6 +2869,25 @@
         return status;
     }
 
+    function finishBatchRunnerInvoiceAttempt(invoiceId, batchResult) {
+        const updated = Store.getRunner();
+        if (!updated?.running || updated.ownerTabId !== TAB_ID) return false;
+
+        try {
+            verifyBatchRunnerInvoiceBatched(invoiceId);
+            if (!batchResult?.skipped) {
+                updated.successes.push(invoiceId);
+            }
+        } catch (err) {
+            updated.failures.push({ invoiceNumber: invoiceId, error: err.message });
+        }
+
+        updated.remaining = updated.remaining.filter(n => n !== invoiceId);
+        updated.currentInvoice = null;
+        Store.saveRunner(stampRunnerHeartbeat(updated));
+        return true;
+    }
+
     async function continueBatchRunnerIfNeeded() {
         if (runnerBusy) return;
 
@@ -2903,17 +2924,7 @@
                     skipReadinessCheck: true,
                     preserveQueueUntilRunnerVerified: true
                 });
-                verifyBatchRunnerInvoiceBatched(invoiceId);
-
-                const updated = Store.getRunner();
-                if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
-
-                if (!batchResult.skipped) {
-                    updated.successes.push(invoiceId);
-                }
-                updated.remaining = updated.remaining.filter(n => n !== invoiceId);
-                updated.currentInvoice = null;
-                Store.saveRunner(stampRunnerHeartbeat(updated));
+                finishBatchRunnerInvoiceAttempt(invoiceId, batchResult);
             } catch (err) {
                 const updated = Store.getRunner();
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
