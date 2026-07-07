@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.27
+// @version      1.0.31
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.27 loaded\nBuilt: 2026-07-07T20:36:33.930Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.31 loaded\nBuilt: 2026-07-07T20:48:07.397Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -860,7 +860,6 @@
     const ACTIVE_BATCH_KEY = 'st_active_batch';
     const BATCH_RUNNER_KEY = 'st_batch_runner_state';
     const MATERIAL_CLEANUP_KEY = 'st_material_cleanup_state';
-    const OPERATIONAL_READINESS_KEY = 'st_operational_readiness_state';
     const TOOLKIT_POSITION_KEY = 'st_toolkit_position';
     const TOOLKIT_MESSAGE_KEY = 'st_toolkit_message';
     const TOOLKIT_SECTIONS_KEY = 'st_toolkit_sections_open';
@@ -906,8 +905,6 @@
         ]
     };
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
-    const OPERATIONAL_READINESS_CACHE_MS = 60000;
-    const READINESS_CACHE_TTL_MS = 10 * 60 * 1000;
     const READINESS_DEBUG = false;
     const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
 
@@ -918,8 +915,8 @@
     let toolkitClosed = false;
     let dragState = null;
     let lastRenderedBadMaterialsCount = null;
-    let readinessFetchState = null;
-    const readinessMemoryCache = new Map();
+    const readinessStateByInvoiceId = new Map();
+    const readinessFetchByInvoiceId = new Map();
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1148,67 +1145,6 @@
         };
     }
 
-    function normalizeOperationalReadinessEntry(readiness, invoiceId = null) {
-        if (!readiness || typeof readiness !== 'object' || Array.isArray(readiness)) return null;
-
-        const checks = Array.isArray(readiness.checks)
-            ? readiness.checks
-                .filter(check => check && typeof check === 'object')
-                .map(check => ({
-                    id: typeof check.id === 'string' ? check.id : '',
-                    label: typeof check.label === 'string' ? check.label : '',
-                    status: ['loading', 'pass', 'blocked', 'error'].includes(check.status) ? check.status : 'error',
-                    displayText: typeof check.displayText === 'string' ? check.displayText : '',
-                    isBlocker: check.isBlocker === true
-                }))
-                .filter(check => check.id && check.label && check.displayText)
-            : [];
-
-        const normalizedInvoiceId = typeof readiness.invoiceId === 'string' && /^\d+$/.test(readiness.invoiceId)
-            ? readiness.invoiceId
-            : (typeof readiness.invoiceNumber === 'string' && /^\d+$/.test(readiness.invoiceNumber)
-                ? readiness.invoiceNumber
-                : null);
-
-        return {
-            invoiceId: normalizedInvoiceId || invoiceId || null,
-            checks,
-            at: typeof readiness.at === 'string' ? readiness.at : null
-        };
-    }
-
-    function normalizeOperationalReadinessCache(rawCache) {
-        if (!rawCache || typeof rawCache !== 'object' || Array.isArray(rawCache)) {
-            return {};
-        }
-
-        if (rawCache.checks || rawCache.invoiceId || rawCache.invoiceNumber || rawCache.at) {
-            const entry = normalizeOperationalReadinessEntry(rawCache, rawCache.invoiceId);
-            return entry?.invoiceId ? { [entry.invoiceId]: entry } : {};
-        }
-
-        return Object.fromEntries(Object.entries(rawCache).flatMap(([entryInvoiceId, entry]) => {
-            const normalizedEntry = normalizeOperationalReadinessEntry(entry, entryInvoiceId);
-            return normalizedEntry?.invoiceId ? [[normalizedEntry.invoiceId, normalizedEntry]] : [];
-        }));
-    }
-
-    function pruneOperationalReadinessCache(cache, preserveInvoiceId = null) {
-        const now = Date.now();
-        const prunedEntries = Object.entries(cache).filter(([, entry]) => {
-            if (!entry || typeof entry !== 'object') return false;
-            if (!entry.at) return true;
-            return now - Date.parse(entry.at) < READINESS_CACHE_TTL_MS;
-        });
-
-        const prunedCache = Object.fromEntries(prunedEntries);
-        if (preserveInvoiceId && cache[preserveInvoiceId]) {
-            prunedCache[preserveInvoiceId] = cache[preserveInvoiceId];
-        }
-
-        return prunedCache;
-    }
-
     const Store = {
         getQueue: () => normalizeQueue(safeParse(REVIEW_QUEUE_KEY, [])),
         saveQueue: queue => localStorage.setItem(REVIEW_QUEUE_KEY, JSON.stringify(normalizeQueue(queue))),
@@ -1224,57 +1160,6 @@
         getMaterialCleanup: () => normalizeMaterialCleanup(safeParse(MATERIAL_CLEANUP_KEY, null)),
         saveMaterialCleanup: cleanup => localStorage.setItem(MATERIAL_CLEANUP_KEY, JSON.stringify(normalizeMaterialCleanup(cleanup))),
         clearMaterialCleanup: () => localStorage.removeItem(MATERIAL_CLEANUP_KEY),
-
-        getOperationalReadiness: invoiceId => {
-            if (!invoiceId) return null;
-
-            const memoryEntry = readinessMemoryCache.get(invoiceId);
-            if (memoryEntry) {
-                if (READINESS_DEBUG) console.log('[readiness] read-memory', invoiceId, memoryEntry);
-                return memoryEntry;
-            }
-
-            const cache = pruneOperationalReadinessCache(normalizeOperationalReadinessCache(safeParse(OPERATIONAL_READINESS_KEY, null)));
-            const storageEntry = cache[invoiceId] || null;
-            if (storageEntry) {
-                readinessMemoryCache.set(invoiceId, storageEntry);
-                if (READINESS_DEBUG) console.log('[readiness] hydrate-memory', invoiceId, storageEntry);
-            }
-
-            if (READINESS_DEBUG) console.log('[readiness] read-storage', invoiceId, storageEntry);
-            return storageEntry;
-        },
-        saveOperationalReadiness: (invoiceId, readiness) => {
-            if (!invoiceId) return;
-
-            const cache = pruneOperationalReadinessCache(normalizeOperationalReadinessCache(safeParse(OPERATIONAL_READINESS_KEY, null)));
-            const entry = normalizeOperationalReadinessEntry(readiness, invoiceId);
-            if (!entry?.invoiceId) return;
-
-            readinessMemoryCache.set(entry.invoiceId, entry);
-            cache[entry.invoiceId] = entry;
-            const nextCache = pruneOperationalReadinessCache(cache, entry.invoiceId);
-            if (!nextCache[entry.invoiceId]) {
-                nextCache[entry.invoiceId] = entry;
-            }
-            localStorage.setItem(OPERATIONAL_READINESS_KEY, JSON.stringify(nextCache));
-            if (READINESS_DEBUG) console.log('[readiness] save', entry.invoiceId, entry);
-        },
-        clearOperationalReadiness: invoiceId => {
-            if (!invoiceId) {
-                localStorage.removeItem(OPERATIONAL_READINESS_KEY);
-                return;
-            }
-
-            const cache = pruneOperationalReadinessCache(normalizeOperationalReadinessCache(safeParse(OPERATIONAL_READINESS_KEY, null)));
-            delete cache[invoiceId];
-            const nextCache = pruneOperationalReadinessCache(cache);
-            if (Object.keys(nextCache).length) {
-                localStorage.setItem(OPERATIONAL_READINESS_KEY, JSON.stringify(nextCache));
-            } else {
-                localStorage.removeItem(OPERATIONAL_READINESS_KEY);
-            }
-        },
 
         getMessage: () => safeParse(TOOLKIT_MESSAGE_KEY, null),
         setMessage: message => localStorage.setItem(TOOLKIT_MESSAGE_KEY, JSON.stringify({
@@ -2197,24 +2082,13 @@
                 };
             }
 
-            const readiness = Store.getOperationalReadiness(invoiceId);
+            const readiness = readinessStateByInvoiceId.get(invoiceId) || null;
             const hasMatchingInvoice = readiness?.invoiceId === invoiceId;
-            const inFlight =
-                readinessFetchState?.invoiceId === invoiceId &&
-                readinessFetchState.inFlight;
+            const inFlight = readinessFetchByInvoiceId.has(invoiceId);
 
             if (READINESS_DEBUG) console.log('[readiness] getState', { invoiceId, readiness, inFlight, hasMatchingInvoice });
 
             if (!hasMatchingInvoice) {
-                return {
-                    status: 'loading',
-                    checks: this.buildLoadingChecks(businessUnitSource),
-                    blockers: [],
-                    loading: true
-                };
-            }
-
-            if (inFlight) {
                 return {
                     status: 'loading',
                     checks: this.buildLoadingChecks(businessUnitSource),
@@ -2233,7 +2107,7 @@
             }
 
             const checks = readiness.checks;
-            const blockers = checks.filter(check => check.status === 'blocked' && check.isBlocker);
+            const blockers = checks.filter(check => check.isBlocker && check.status !== 'pass');
             const errors = checks.filter(check => check.status === 'error');
 
             if (errors.length) {
@@ -2274,22 +2148,12 @@
     function refreshOperationalReadinessIfNeeded(invoiceId) {
         if (!invoiceId) return;
 
+        if (readinessStateByInvoiceId.has(invoiceId)) return;
+        if (readinessFetchByInvoiceId.has(invoiceId)) return;
+
         const businessUnitSource = getBusinessUnitReadinessSourceFromDom();
-        const cachedReadiness = Store.getOperationalReadiness(invoiceId);
-        const cachedAt = Date.parse(cachedReadiness?.at || '');
-        if (
-            cachedReadiness?.invoiceId === invoiceId &&
-            cachedReadiness.checks.length &&
-            Number.isFinite(cachedAt) &&
-            Date.now() - cachedAt < OPERATIONAL_READINESS_CACHE_MS
-        ) {
-            return;
-        }
-        if (readinessFetchState?.invoiceId === invoiceId && readinessFetchState.inFlight) return;
 
-        readinessFetchState = { invoiceId, inFlight: true };
-
-        fetchInvoiceData(invoiceId)
+        const fetchPromise = fetchInvoiceData(invoiceId)
             .then(invoiceData => {
                 const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
                     ? String(invoiceData.Id)
@@ -2320,9 +2184,8 @@
                     at: new Date().toISOString()
                 };
 
-                Store.saveOperationalReadiness(invoiceId, readiness);
-                readinessFetchState = null;
-                setTimeout(createBox, 0);
+                readinessStateByInvoiceId.set(invoiceId, readiness);
+                if (READINESS_DEBUG) console.log('[readiness] save-memory', invoiceId, readiness);
             })
             .catch(err => {
                 const readiness = {
@@ -2347,16 +2210,15 @@
                     at: new Date().toISOString()
                 };
 
-                Store.saveOperationalReadiness(invoiceId, readiness);
-                readinessFetchState = null;
-                setTimeout(createBox, 0);
+                readinessStateByInvoiceId.set(invoiceId, readiness);
+                if (READINESS_DEBUG) console.log('[readiness] save-memory-error', invoiceId, readiness);
             })
             .finally(() => {
-                if (readinessFetchState?.invoiceId === invoiceId) {
-                    readinessFetchState = null;
-                }
+                readinessFetchByInvoiceId.delete(invoiceId);
                 if (getInvoiceId() === invoiceId) createBox();
             });
+
+        readinessFetchByInvoiceId.set(invoiceId, fetchPromise);
     }
 
     function getInvoiceMaterials(invoiceData) {
@@ -2609,6 +2471,12 @@
             return false;
         }
 
+        if (readinessState.status !== 'pass') {
+            setToolkitMessage('Cannot mark reviewed until readiness checks pass.');
+            createBox();
+            return false;
+        }
+
         const queue = Store.getQueue();
 
         if (!isInQueue(invoiceId)) {
@@ -2768,6 +2636,10 @@
 
             if (readinessState.status === 'blocked') {
                 throw new Error(`Cannot batch until all readiness checks pass: ${readinessState.blockers.map(check => check.displayText).join('; ')}.`);
+            }
+
+            if (readinessState.status !== 'pass') {
+                throw new Error('Cannot batch until readiness checks pass.');
             }
         }
 
@@ -3189,7 +3061,7 @@
 
     function readinessIcon(status) {
         if (status === 'pass') return '✅';
-        if (status === 'blocked' || status === 'error') return '❌';
+        if (status === 'blocked' || status === 'error' || status === 'fail') return '❌';
         return '⚪';
     }
 
@@ -3229,6 +3101,7 @@
         const materialCleanup = Store.getMaterialCleanup();
         const sections = Store.getSections();
         const invoiceContext = getInvoiceContextState(invoiceId);
+        refreshOperationalReadinessIfNeeded(invoiceId);
         const readinessState = getOperationalReadinessState(invoiceId);
         const readinessChecks = readinessState.checks;
         const readinessActionDisabled = readinessState.status !== 'pass';
@@ -3303,7 +3176,6 @@
                 : '<span>Not Reviewed</span>';
 
         const runnerStatus = getRunnerStatusText(runner);
-        refreshOperationalReadinessIfNeeded(invoiceId);
 
         box.innerHTML = `
             ${buildHeader(batchRunnerActive)}
@@ -3416,11 +3288,6 @@
         lastRouteKey = currentRouteKey;
         manualLauncherOpen = false;
         lastProcessedInvoice = null;
-
-        const currentInvoiceId = getInvoiceId();
-        if (readinessFetchState?.invoiceId && readinessFetchState.invoiceId !== currentInvoiceId) {
-            readinessFetchState = null;
-        }
 
         if (!isInvoicePage()) {
             toolkitClosed = true;
