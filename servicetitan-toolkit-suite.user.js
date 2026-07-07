@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.25
+// @version      1.0.27
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.25 loaded\nBuilt: 2026-07-07T20:23:43.949Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.27 loaded\nBuilt: 2026-07-07T20:36:33.930Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -1193,13 +1193,20 @@
         }));
     }
 
-    function pruneOperationalReadinessCache(cache) {
+    function pruneOperationalReadinessCache(cache, preserveInvoiceId = null) {
         const now = Date.now();
-        return Object.fromEntries(Object.entries(cache).filter(([, entry]) => {
+        const prunedEntries = Object.entries(cache).filter(([, entry]) => {
             if (!entry || typeof entry !== 'object') return false;
             if (!entry.at) return true;
             return now - Date.parse(entry.at) < READINESS_CACHE_TTL_MS;
-        }));
+        });
+
+        const prunedCache = Object.fromEntries(prunedEntries);
+        if (preserveInvoiceId && cache[preserveInvoiceId]) {
+            prunedCache[preserveInvoiceId] = cache[preserveInvoiceId];
+        }
+
+        return prunedCache;
     }
 
     const Store = {
@@ -1246,7 +1253,10 @@
 
             readinessMemoryCache.set(entry.invoiceId, entry);
             cache[entry.invoiceId] = entry;
-            const nextCache = pruneOperationalReadinessCache(cache);
+            const nextCache = pruneOperationalReadinessCache(cache, entry.invoiceId);
+            if (!nextCache[entry.invoiceId]) {
+                nextCache[entry.invoiceId] = entry;
+            }
             localStorage.setItem(OPERATIONAL_READINESS_KEY, JSON.stringify(nextCache));
             if (READINESS_DEBUG) console.log('[readiness] save', entry.invoiceId, entry);
         },
