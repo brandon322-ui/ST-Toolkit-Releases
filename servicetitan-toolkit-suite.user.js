@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.43
+// @version      1.0.45
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.43 loaded\nBuilt: 2026-07-08T01:40:15.807Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.45 loaded\nBuilt: 2026-07-08T02:49:07.024Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -979,17 +979,42 @@
         return displayedInvoiceNumber || invoiceId || 'Unknown';
     }
 
+    function getRenderedInvoiceInternalIdSignals() {
+        const signals = new Set();
+
+        [...document.querySelectorAll('a[href], form[action]')].forEach(element => {
+            const value = element.getAttribute('href') || element.getAttribute('action') || '';
+            const patterns = [
+                /\/Invoice\/(?:Email|Print)\/(\d+)/i,
+                /\/Invoice(?:\?id=|\/)(\d+)/i,
+                /\/paymentactions\/(?:\d+\/){2}(\d+)/i
+            ];
+
+            patterns.forEach(pattern => {
+                const match = value.match(pattern);
+                if (match) signals.add(match[1]);
+            });
+        });
+
+        return signals;
+    }
+
     function getInvoiceContextState(expectedInvoiceId = getInvoiceId()) {
         const invoiceId = getInvoiceId();
         const displayedInvoiceNumber = getDisplayedInvoiceNumber();
+        const renderedInvoiceIds = getRenderedInvoiceInternalIdSignals();
+        const renderedInvoiceMatches = !renderedInvoiceIds.size ||
+            (invoiceId && renderedInvoiceIds.has(invoiceId));
 
         return {
             invoiceId,
             expectedInvoiceId,
             displayedInvoiceNumber,
+            renderedInvoiceIds: [...renderedInvoiceIds],
             stable: Boolean(
                 invoiceId &&
-                (!expectedInvoiceId || expectedInvoiceId === invoiceId)
+                (!expectedInvoiceId || expectedInvoiceId === invoiceId) &&
+                renderedInvoiceMatches
             )
         };
     }
@@ -2943,9 +2968,7 @@
             delete updated.attempts[invoiceId];
             document.title = `✅ Batched - ${document.title}`;
             clearReviewedTabMarker();
-            if (!batchResult?.skipped) {
-                updated.successes.push(invoiceId);
-            }
+            updated.successes.push(invoiceId);
             logBatchQueueDebug('invoice-verified-success', {
                 invoiceId,
                 batchResult,
@@ -3325,7 +3348,7 @@
             : { found: false, isBatched: false };
         const batched = stBatch.found ? stBatch.isBatched : false;
 
-        if (invoiceId && batched && inQueue) {
+        if (invoiceId && batched && inQueue && !batchRunnerActive) {
             removeInvoiceFromReviewQueue(invoiceId, 'render-verified-batched');
             clearReviewedTabMarker();
             queue = Store.getQueue();
