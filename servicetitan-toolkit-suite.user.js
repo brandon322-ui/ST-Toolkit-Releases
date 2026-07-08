@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.41
+// @version      1.0.43
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.41 loaded\nBuilt: 2026-07-07T23:41:31.027Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.43 loaded\nBuilt: 2026-07-08T01:40:15.807Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -905,6 +905,7 @@
         ]
     };
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
+    const BATCH_QUEUE_MAX_ATTEMPTS = 3;
     const READINESS_DEBUG = false;
     const BATCH_QUEUE_DEBUG = false;
     const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
@@ -1102,6 +1103,17 @@
         return [...new Set(values.filter(value => typeof value === 'string' && /^\d+$/.test(value)))];
     }
 
+    function normalizeRunnerAttempts(attempts) {
+        if (!attempts || typeof attempts !== 'object' || Array.isArray(attempts)) return {};
+
+        return Object.fromEntries(Object.entries(attempts)
+            .filter(([invoiceNumber]) => /^\d+$/.test(invoiceNumber))
+            .map(([invoiceNumber, count]) => [
+                invoiceNumber,
+                Math.max(0, Math.min(BATCH_QUEUE_MAX_ATTEMPTS, Math.floor(Number(count) || 0)))
+            ]));
+    }
+
     function normalizeRunner(runner) {
         if (!runner || typeof runner !== 'object' || Array.isArray(runner)) return null;
 
@@ -1124,6 +1136,7 @@
             batchName: hasValidBatch ? runner.batchName : '',
             remaining,
             urls,
+            attempts: normalizeRunnerAttempts(runner.attempts),
             successes: normalizeInvoiceNumbers(runner.successes),
             failures: Array.isArray(runner.failures)
                 ? runner.failures
@@ -1206,6 +1219,7 @@
             ownerTabId: runner.ownerTabId,
             currentInvoice: runner.currentInvoice,
             remaining: [...(runner.remaining || [])],
+            attempts: { ...(runner.attempts || {}) },
             successes: [...(runner.successes || [])],
             failures: (runner.failures || []).map(failure => ({
                 invoiceNumber: failure.invoiceNumber,
@@ -2825,6 +2839,7 @@
                 acc[item.invoiceNumber] = cleanInvoiceUrl(item.url);
                 return acc;
             }, {}),
+            attempts: {},
             successes: [],
             failures: [],
             currentInvoice: null,
@@ -2877,6 +2892,7 @@
             running: true,
             ownerTabId: TAB_ID,
             remaining: failedInvoices,
+            attempts: {},
             successes: [],
             failures: [],
             currentInvoice: null,
@@ -2923,6 +2939,8 @@
             removeInvoiceFromReviewQueue(invoiceId, batchResult?.skipped
                 ? 'batch-queue-verified-already-batched'
                 : 'batch-queue-verified-batched');
+            updated.attempts = normalizeRunnerAttempts(updated.attempts);
+            delete updated.attempts[invoiceId];
             document.title = `✅ Batched - ${document.title}`;
             clearReviewedTabMarker();
             if (!batchResult?.skipped) {
@@ -2938,6 +2956,8 @@
                 reason: batchResult?.skipped ? 'already verified batched' : 'verified batched after attempt'
             });
         } catch (err) {
+            updated.attempts = normalizeRunnerAttempts(updated.attempts);
+            delete updated.attempts[invoiceId];
             updated.failures.push({ invoiceNumber: invoiceId, error: err.message });
             logBatchQueueDebug('invoice-kept-failure', {
                 invoiceId,
@@ -3018,12 +3038,39 @@
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
 
                 const queueBeforeFailure = getQueueInvoiceNumbers();
+                updated.attempts = normalizeRunnerAttempts(updated.attempts);
+                const attemptCount = (updated.attempts[invoiceId] || 0) + 1;
+                updated.attempts[invoiceId] = attemptCount;
+
+                if (attemptCount < BATCH_QUEUE_MAX_ATTEMPTS) {
+                    updated.currentInvoice = null;
+                    Store.saveRunner(stampRunnerHeartbeat(updated));
+                    lastProcessedInvoice = null;
+                    setToolkitMessage(`Batch runner will retry invoice ${invoiceId}. Attempt ${attemptCount} of ${BATCH_QUEUE_MAX_ATTEMPTS} failed: ${err.message}`);
+                    logBatchQueueDebug('invoice-attempt-retry', {
+                        invoiceId,
+                        attemptCount,
+                        maxAttempts: BATCH_QUEUE_MAX_ATTEMPTS,
+                        error: err.message,
+                        queueBeforeFailure,
+                        queueAfterFailure: getQueueInvoiceNumbers(),
+                        statusAfterError: getServiceTitanBatchStatus(),
+                        runnerAfterRetryScheduled: getRunnerDebugState(updated),
+                        reason: 'attempt failed before verified batch removal; retrying same invoice'
+                    });
+                    forceNavigate(updated.urls[invoiceId] || window.location.href);
+                    return;
+                }
+
                 updated.failures.push({ invoiceNumber: invoiceId, error: err.message });
+                delete updated.attempts[invoiceId];
                 updated.remaining = updated.remaining.filter(n => n !== invoiceId);
                 updated.currentInvoice = null;
                 Store.saveRunner(stampRunnerHeartbeat(updated));
                 logBatchQueueDebug('invoice-attempt-error', {
                     invoiceId,
+                    attemptCount,
+                    maxAttempts: BATCH_QUEUE_MAX_ATTEMPTS,
                     error: err.message,
                     queueBeforeFailure,
                     queueAfterFailure: getQueueInvoiceNumbers(),
