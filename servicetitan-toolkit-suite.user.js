@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.57
+// @version      1.0.59
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.57 loaded\nBuilt: 2026-07-10T22:53:20.377Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.30\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.59 loaded\nBuilt: 2026-07-10T23:01:38.383Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.31\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.30';
+    const VERSION = '3.3.31';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -859,6 +859,7 @@
     const REVIEW_QUEUE_KEY = 'st_reviewed_invoice_queue';
     const ACTIVE_BATCH_KEY = 'st_active_batch';
     const BATCH_RUNNER_KEY = 'st_batch_runner_state';
+    const BATCH_DIAGNOSTICS_KEY = 'st_batch_runner_diagnostics';
     const MATERIAL_CLEANUP_KEY = 'st_material_cleanup_state';
     const TOOLKIT_POSITION_KEY = 'st_toolkit_position';
     const TOOLKIT_MESSAGE_KEY = 'st_toolkit_message';
@@ -921,6 +922,7 @@
     const BATCH_QUEUE_DEBUG = false;
     const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
     const INVOICE_ROUTE_PATTERN = /^#\/(?:editinvoice|invoice)\/(\d+)(?:[/?]|$)/i;
+    const BATCH_DIAGNOSTICS_LIMIT = 80;
 
     const TAB_ID = getTabId();
 
@@ -1063,6 +1065,19 @@
             found: true,
             isBatched: Boolean(statusText) && !isUnbatched
         };
+    }
+
+    function getServiceTitanBatchStatusText() {
+        const batchLabel = [...document.querySelectorAll('li')]
+            .find(li => li.querySelector('label')?.innerText?.trim() === 'Batch');
+
+        if (!batchLabel) return null;
+
+        return String(
+            batchLabel.querySelector('.non-asterisk')?.innerText?.trim() ||
+            batchLabel.innerText.replace('Batch', '').trim() ||
+            ''
+        ).replace(/\s+/g, ' ').trim();
     }
 
     function cleanInvoiceUrl(url) {
@@ -1265,7 +1280,70 @@
         };
     }
 
+    function sanitizeBatchDiagnosticValue(value) {
+        try {
+            return JSON.parse(JSON.stringify(value));
+        } catch {
+            return String(value);
+        }
+    }
+
+    function getBatchDiagnostics() {
+        const entries = safeParse(BATCH_DIAGNOSTICS_KEY, []);
+        return Array.isArray(entries) ? entries : [];
+    }
+
+    function saveBatchDiagnostics(entries) {
+        localStorage.setItem(
+            BATCH_DIAGNOSTICS_KEY,
+            JSON.stringify(entries.slice(-BATCH_DIAGNOSTICS_LIMIT))
+        );
+    }
+
+    function clearBatchDiagnostics() {
+        localStorage.removeItem(BATCH_DIAGNOSTICS_KEY);
+    }
+
+    function getBatchDiagnosticContext() {
+        const invoiceId = getInvoiceId();
+        const invoiceContext = getInvoiceContextState(invoiceId);
+
+        return {
+            href: window.location.href,
+            hash: window.location.hash,
+            documentHidden: document.hidden === true,
+            invoiceId,
+            invoiceContext,
+            displayedInvoiceNumber: invoiceContext.displayedInvoiceNumber,
+            renderedInvoiceIds: invoiceContext.renderedInvoiceIds,
+            serviceTitanBatchStatus: invoiceContext.stable
+                ? getServiceTitanBatchStatus()
+                : { found: false, isBatched: false },
+            serviceTitanBatchText: invoiceContext.stable ? getServiceTitanBatchStatusText() : null,
+            addToBatchButtonReady: Boolean(findAddToBatchButton()),
+            queue: getQueueInvoiceNumbers(),
+            runner: getRunnerDebugState()
+        };
+    }
+
+    function recordBatchDiagnostic(event, details = {}) {
+        try {
+            const entries = getBatchDiagnostics();
+            entries.push({
+                at: new Date().toISOString(),
+                event,
+                details: sanitizeBatchDiagnosticValue(details),
+                context: sanitizeBatchDiagnosticValue(getBatchDiagnosticContext())
+            });
+            saveBatchDiagnostics(entries);
+        } catch (err) {
+            console.warn('[invoice-toolkit][batch-queue] diagnostic capture failed', err);
+        }
+    }
+
     function logBatchQueueDebug(event, details = {}) {
+        recordBatchDiagnostic(event, details);
+
         if (!BATCH_QUEUE_DEBUG && window.STInvoiceToolkitBatchQueueDebug !== true) return;
 
         console.log('[invoice-toolkit][batch-queue]', event, {
@@ -2659,6 +2737,25 @@
         );
     }
 
+    function copyBatchDiagnostics() {
+        const diagnostics = getBatchDiagnostics();
+        const payload = {
+            copiedAt: new Date().toISOString(),
+            toolkitVersion: VERSION,
+            href: window.location.href,
+            invoiceId: getInvoiceId(),
+            queue: Store.getQueue(),
+            runner: Store.getRunner(),
+            currentContext: getBatchDiagnosticContext(),
+            diagnostics
+        };
+
+        copyText(
+            JSON.stringify(payload, null, 2),
+            `Copied ${diagnostics.length} batch diagnostic events.`
+        );
+    }
+
     function showQueue() {
         const queue = Store.getQueue();
 
@@ -2917,6 +3014,7 @@
             finishedAt: null
         });
 
+        clearBatchDiagnostics();
         Store.saveRunner(runner);
         logBatchQueueDebug('runner-start', {
             batchName: activeBatch.batchName,
@@ -3380,7 +3478,8 @@
             'st-batch-current-btn': batchCurrentInvoiceManual,
             'st-batch-reviewed-queue-btn': startBatchReviewedQueue,
             'st-retry-failed-btn': retryFailedInvoices,
-            'st-cancel-batch-runner-btn': cancelBatchRunner
+            'st-cancel-batch-runner-btn': cancelBatchRunner,
+            'st-copy-batch-diagnostics-btn': copyBatchDiagnostics
         };
 
         box.addEventListener('click', event => {
@@ -3393,7 +3492,11 @@
 
             const button = event.target.closest('button');
             if (!button || button.disabled) return;
-            if (state.batchRunnerActive && button.id !== 'st-cancel-batch-runner-btn') return;
+            if (
+                state.batchRunnerActive &&
+                button.id !== 'st-cancel-batch-runner-btn' &&
+                button.id !== 'st-copy-batch-diagnostics-btn'
+            ) return;
 
             actions[button.id]?.();
         });
@@ -3556,6 +3659,9 @@
                                 smallButton('st-retry-failed-btn', 'Retry Failed', disableForRunner(runner.running || !runner.failures?.length), 'st-btn-warning'),
                                 smallButton('st-cancel-batch-runner-btn', 'Cancel Runner', false, 'st-btn-danger')
                             ])}
+                            <div style="margin-top:7px;">
+                                ${smallButton('st-copy-batch-diagnostics-btn', 'Copy Diagnostics', false, 'st-btn-muted')}
+                            </div>
                         </div>
                     ` : ''}
                 ` : ''}
