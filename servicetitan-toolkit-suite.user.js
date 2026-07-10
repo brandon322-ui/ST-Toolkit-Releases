@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.45
+// @version      1.0.48
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.45 loaded\nBuilt: 2026-07-08T02:49:07.024Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.24\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.48 loaded\nBuilt: 2026-07-10T16:28:24.823Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.25\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.24';
+    const VERSION = '3.3.25';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -3003,6 +3003,52 @@
         return true;
     }
 
+    function advanceBatchRunnerAfterCurrentInvoice() {
+        const updatedRunner = Store.getRunner();
+
+        if (updatedRunner?.running && updatedRunner.ownerTabId === TAB_ID && updatedRunner.remaining.length > 0) {
+            const nextInvoice = updatedRunner.remaining[0];
+            const nextUrl = updatedRunner.urls[nextInvoice];
+
+            if (!nextUrl) {
+                updatedRunner.running = false;
+                updatedRunner.currentInvoice = null;
+                updatedRunner.failures.push({
+                    invoiceNumber: nextInvoice,
+                    error: 'Batch runner stopped because the stored invoice URL is missing.'
+                });
+                Store.saveRunner(stampRunnerHeartbeat(updatedRunner));
+                setToolkitMessage('Batch runner stopped safely because an invoice URL is missing.');
+                createBox();
+                return true;
+            }
+
+            forceNavigate(nextUrl);
+            return true;
+        }
+
+        if (updatedRunner?.ownerTabId === TAB_ID) {
+            updatedRunner.running = false;
+            updatedRunner.finishedAt = new Date().toISOString();
+
+            setToolkitMessage(`Batch run finished. Successful: ${updatedRunner.successes.length}. Failed: ${updatedRunner.failures.length}.`);
+            if (updatedRunner.failures.length) {
+                Store.saveRunner(stampRunnerHeartbeat(updatedRunner));
+            } else {
+                Store.clearRunner();
+            }
+            logBatchQueueDebug('runner-finish', {
+                finishedRunner: getRunnerDebugState(updatedRunner),
+                queueAtFinish: getQueueInvoiceNumbers(),
+                clearedRunner: updatedRunner.failures.length === 0
+            });
+            createBox();
+            return true;
+        }
+
+        return false;
+    }
+
     async function continueBatchRunnerIfNeeded() {
         if (runnerBusy) return;
 
@@ -3017,7 +3063,22 @@
         const invoiceId = getInvoiceId();
         if (!invoiceId) return;
         if (!runner.remaining.includes(invoiceId)) return;
-        if (lastProcessedInvoice === invoiceId) return;
+        if (lastProcessedInvoice === invoiceId) {
+            if (!isCurrentlyBatchedInServiceTitan()) return;
+
+            runnerBusy = true;
+            try {
+                finishBatchRunnerInvoiceAttempt(invoiceId, {
+                    recovered: true,
+                    invoiceNumber: invoiceId
+                });
+                lastProcessedInvoice = null;
+                advanceBatchRunnerAfterCurrentInvoice();
+            } finally {
+                runnerBusy = false;
+            }
+            return;
+        }
 
         runnerBusy = true;
         try {
@@ -3103,46 +3164,7 @@
                 });
             }
 
-            const updatedRunner = Store.getRunner();
-
-            if (updatedRunner?.running && updatedRunner.ownerTabId === TAB_ID && updatedRunner.remaining.length > 0) {
-                const nextInvoice = updatedRunner.remaining[0];
-                const nextUrl = updatedRunner.urls[nextInvoice];
-
-                if (!nextUrl) {
-                    updatedRunner.running = false;
-                    updatedRunner.currentInvoice = null;
-                    updatedRunner.failures.push({
-                        invoiceNumber: nextInvoice,
-                        error: 'Batch runner stopped because the stored invoice URL is missing.'
-                    });
-                    Store.saveRunner(stampRunnerHeartbeat(updatedRunner));
-                    setToolkitMessage('Batch runner stopped safely because an invoice URL is missing.');
-                    createBox();
-                    return;
-                }
-
-                forceNavigate(nextUrl);
-                return;
-            }
-
-            if (updatedRunner?.ownerTabId === TAB_ID) {
-                updatedRunner.running = false;
-                updatedRunner.finishedAt = new Date().toISOString();
-
-                setToolkitMessage(`Batch run finished. Successful: ${updatedRunner.successes.length}. Failed: ${updatedRunner.failures.length}.`);
-                if (updatedRunner.failures.length) {
-                    Store.saveRunner(stampRunnerHeartbeat(updatedRunner));
-                } else {
-                    Store.clearRunner();
-                }
-                logBatchQueueDebug('runner-finish', {
-                    finishedRunner: getRunnerDebugState(updatedRunner),
-                    queueAtFinish: getQueueInvoiceNumbers(),
-                    clearedRunner: updatedRunner.failures.length === 0
-                });
-                createBox();
-            }
+            advanceBatchRunnerAfterCurrentInvoice();
         } finally {
             runnerBusy = false;
         }
