@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.48
+// @version      1.0.50
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.48 loaded\nBuilt: 2026-07-10T16:28:24.823Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.25\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.50 loaded\nBuilt: 2026-07-10T16:35:29.175Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.26\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.25';
+    const VERSION = '3.3.26';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -2955,6 +2955,7 @@
     function finishBatchRunnerInvoiceAttempt(invoiceId, batchResult) {
         const updated = Store.getRunner();
         if (!updated?.running || updated.ownerTabId !== TAB_ID) return false;
+        if (!updated.remaining.includes(invoiceId)) return false;
 
         const queueBefore = getQueueInvoiceNumbers();
         const statusBeforeVerification = getServiceTitanBatchStatus();
@@ -2968,7 +2969,7 @@
             delete updated.attempts[invoiceId];
             document.title = `✅ Batched - ${document.title}`;
             clearReviewedTabMarker();
-            updated.successes.push(invoiceId);
+            if (!updated.successes.includes(invoiceId)) updated.successes.push(invoiceId);
             logBatchQueueDebug('invoice-verified-success', {
                 invoiceId,
                 batchResult,
@@ -3049,8 +3050,37 @@
         return false;
     }
 
+    function recoverBusyRunnerIfCurrentInvoiceIsBatched() {
+        const invoiceId = getInvoiceId();
+        const runner = Store.getRunner();
+
+        if (
+            !invoiceId ||
+            !runner?.running ||
+            runner.ownerTabId !== TAB_ID ||
+            runner.currentInvoice !== invoiceId ||
+            !runner.remaining.includes(invoiceId) ||
+            !isCurrentlyBatchedInServiceTitan()
+        ) {
+            return false;
+        }
+
+        runnerBusy = false;
+        lastProcessedInvoice = null;
+        finishBatchRunnerInvoiceAttempt(invoiceId, {
+            recovered: true,
+            recoveredFromBusy: true,
+            invoiceNumber: invoiceId
+        });
+        advanceBatchRunnerAfterCurrentInvoice();
+        return true;
+    }
+
     async function continueBatchRunnerIfNeeded() {
-        if (runnerBusy) return;
+        if (runnerBusy) {
+            recoverBusyRunnerIfCurrentInvoiceIsBatched();
+            return;
+        }
 
         const runner = Store.getRunner();
         if (!runner?.running) return;
@@ -3120,6 +3150,7 @@
             } catch (err) {
                 const updated = Store.getRunner();
                 if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
+                if (!updated.remaining.includes(invoiceId)) return;
 
                 const queueBeforeFailure = getQueueInvoiceNumbers();
                 updated.attempts = normalizeRunnerAttempts(updated.attempts);
