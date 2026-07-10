@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.50
+// @version      1.0.52
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.50 loaded\nBuilt: 2026-07-10T16:35:29.175Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.26\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.52 loaded\nBuilt: 2026-07-10T21:50:16.829Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.27\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.26';
+    const VERSION = '3.3.27';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -906,6 +906,13 @@
     };
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
     const BATCH_QUEUE_MAX_ATTEMPTS = 3;
+    const BATCH_RUNNER_PAGE_SETTLE_MS = 1500;
+    const BATCH_RUNNER_DROPDOWN_OPEN_MS = 600;
+    const BATCH_RUNNER_DROPDOWN_SETTLE_MS = 900;
+    const BATCH_RUNNER_SELECTION_SETTLE_MS = 900;
+    const BATCH_RUNNER_SAVE_SETTLE_MS = 1200;
+    const BATCH_RUNNER_VERIFY_SETTLE_MS = 1200;
+    const BATCH_RUNNER_ADVANCE_SETTLE_MS = 1500;
     const READINESS_DEBUG = false;
     const BATCH_QUEUE_DEBUG = false;
     const READINESS_BLOCKER_MESSAGE_PATTERN = /Cannot (?:mark reviewed|batch).*readiness checks/i;
@@ -2736,11 +2743,14 @@
             return { skipped: true, invoiceNumber: invoiceId };
         }
 
+        await sleep(BATCH_RUNNER_PAGE_SETTLE_MS);
+
         const addButton = findAddToBatchButton();
 
         if (!addButton) throw new Error('Could not find Add to Batch button.');
 
         addButton.click();
+        await sleep(BATCH_RUNNER_DROPDOWN_OPEN_MS);
 
         const select = await waitForCondition(
             findBatchSelect,
@@ -2751,6 +2761,7 @@
         );
 
         if (!select) throw new Error('Could not find batch dropdown.');
+        await sleep(BATCH_RUNNER_DROPDOWN_SETTLE_MS);
 
         const option = [...select.options].find(o => o.innerText.trim() === activeBatch.batchName);
 
@@ -2759,6 +2770,7 @@
         select.value = option.value;
         select.dispatchEvent(new Event('input', { bubbles: true }));
         select.dispatchEvent(new Event('change', { bubbles: true }));
+        await sleep(BATCH_RUNNER_SELECTION_SETTLE_MS);
 
         const saveButton = await waitForCondition(
             findSaveButton,
@@ -2769,8 +2781,10 @@
         );
 
         if (!saveButton) throw new Error('Could not find green Save button.');
+        await sleep(BATCH_RUNNER_SAVE_SETTLE_MS);
 
         saveButton.click();
+        await sleep(BATCH_RUNNER_VERIFY_SETTLE_MS);
 
         const stBatch = await waitForCondition(
             () => {
@@ -2796,6 +2810,8 @@
             document.title = `✅ Batched - ${document.title}`;
             clearReviewedTabMarker();
         }
+
+        await sleep(BATCH_RUNNER_VERIFY_SETTLE_MS);
 
         return { success: true, invoiceNumber: invoiceId };
     }
@@ -3103,6 +3119,7 @@
                     invoiceNumber: invoiceId
                 });
                 lastProcessedInvoice = null;
+                await sleep(BATCH_RUNNER_ADVANCE_SETTLE_MS);
                 advanceBatchRunnerAfterCurrentInvoice();
             } finally {
                 runnerBusy = false;
@@ -3130,6 +3147,15 @@
                     {
                         timeout: 60000,
                         message: `Timed out waiting for invoice ${invoiceId} page context to stabilize.`
+                    }
+                );
+
+                await sleep(BATCH_RUNNER_PAGE_SETTLE_MS);
+                await waitForCondition(
+                    () => isBatchRunnerInvoiceReady(invoiceId),
+                    {
+                        timeout: 15000,
+                        message: `Timed out waiting for invoice ${invoiceId} page context to remain stable.`
                     }
                 );
 
@@ -3173,6 +3199,7 @@
                         runnerAfterRetryScheduled: getRunnerDebugState(updated),
                         reason: 'attempt failed before verified batch removal; retrying same invoice'
                     });
+                    await sleep(BATCH_RUNNER_ADVANCE_SETTLE_MS);
                     forceNavigate(updated.urls[invoiceId] || window.location.href);
                     return;
                 }
@@ -3195,6 +3222,7 @@
                 });
             }
 
+            await sleep(BATCH_RUNNER_ADVANCE_SETTLE_MS);
             advanceBatchRunnerAfterCurrentInvoice();
         } finally {
             runnerBusy = false;
