@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.52
+// @version      1.0.54
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.52 loaded\nBuilt: 2026-07-10T21:50:16.829Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.27\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.54 loaded\nBuilt: 2026-07-10T22:13:30.571Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.28\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.27';
+    const VERSION = '3.3.28';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -905,6 +905,7 @@
         ]
     };
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
+    const MATERIAL_CLEANUP_STALE_MS = 10 * 60 * 1000;
     const BATCH_QUEUE_MAX_ATTEMPTS = 3;
     const BATCH_RUNNER_PAGE_SETTLE_MS = 1500;
     const BATCH_RUNNER_DROPDOWN_OPEN_MS = 600;
@@ -2443,9 +2444,34 @@
         createBox();
     }
 
+    function isMaterialCleanupStale(cleanup) {
+        if (!cleanup?.running) return false;
+        if (!cleanup.at) return true;
+
+        const cleanupTime = Date.parse(cleanup.at);
+        return !Number.isFinite(cleanupTime) ||
+            Date.now() - cleanupTime > MATERIAL_CLEANUP_STALE_MS;
+    }
+
+    function getActiveMaterialCleanupForInvoice(invoiceId = getInvoiceId()) {
+        const cleanup = Store.getMaterialCleanup();
+        if (!cleanup?.running) return cleanup;
+
+        const belongsToCurrentInvoice = cleanup.invoiceNumber && invoiceId &&
+            cleanup.invoiceNumber === invoiceId;
+
+        if (!belongsToCurrentInvoice || isMaterialCleanupStale(cleanup)) {
+            Store.clearMaterialCleanup();
+            return null;
+        }
+
+        return cleanup;
+    }
+
     async function cleanBadMaterials(silent = false, options = {}) {
         try {
-            const activeCleanup = Store.getMaterialCleanup();
+            const invoiceId = getInvoiceId();
+            const activeCleanup = getActiveMaterialCleanupForInvoice(invoiceId);
             if (activeCleanup?.running) {
                 createBox();
                 return {
@@ -2456,7 +2482,6 @@
                 };
             }
 
-            const invoiceId = getInvoiceId();
             const reloadAfter = options.reloadAfter !== false;
             setMaterialCleanupProgress({ invoiceNumber: invoiceId });
 
@@ -3397,9 +3422,9 @@
         const activeBatch = Store.getActiveBatch();
         const runner = Store.getRunner();
         const storedMessage = Store.getMessage();
-        const materialCleanup = Store.getMaterialCleanup();
         const sections = Store.getSections();
         const invoiceContext = getInvoiceContextState(invoiceId);
+        const materialCleanup = getActiveMaterialCleanupForInvoice(invoiceId);
         refreshOperationalReadinessIfNeeded(invoiceId);
         const readinessState = getOperationalReadinessState(invoiceId);
         const readinessChecks = readinessState.checks;
