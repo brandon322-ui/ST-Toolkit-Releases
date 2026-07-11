@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.71
+// @version      1.0.73
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.71 loaded\nBuilt: 2026-07-11T03:36:12.024Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.38\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.73 loaded\nBuilt: 2026-07-11T03:40:44.143Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.39\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.38';
+    const VERSION = '3.3.39';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -3833,6 +3833,8 @@
                 : '<span>Not Reviewed</span>';
 
         const runnerStatus = getRunnerStatusText(runner);
+        const batchDiagnosticsCount = getBatchDiagnostics().length;
+        const showStandaloneBatchDiagnostics = batchDiagnosticsCount > 0 && !runner;
 
         box.innerHTML = `
             ${buildHeader(batchRunnerActive)}
@@ -3862,6 +3864,18 @@
                                 smallButton('st-retry-failed-btn', 'Retry Failed', disableForRunner(runner.running || !runner.failures?.length), 'st-btn-warning'),
                                 smallButton('st-cancel-batch-runner-btn', 'Cancel Runner', false, 'st-btn-danger')
                             ])}
+                            <div style="margin-top:7px;">
+                                ${smallButton('st-copy-batch-diagnostics-btn', 'Copy Diagnostics', false, 'st-btn-muted')}
+                            </div>
+                        </div>
+                    ` : ''}
+                ` : ''}
+
+                ${showStandaloneBatchDiagnostics ? `
+                    ${sectionHeader(`Batch Diagnostics — ${batchDiagnosticsCount} events`, 'runner', sections.runner)}
+                    ${sections.runner ? `
+                        <div class="st-card">
+                            <div class="st-small">No active runner state found.</div>
                             <div style="margin-top:7px;">
                                 ${smallButton('st-copy-batch-diagnostics-btn', 'Copy Diagnostics', false, 'st-btn-muted')}
                             </div>
