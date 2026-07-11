@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.64
+// @version      1.0.66
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.64 loaded\nBuilt: 2026-07-11T03:10:50.953Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.34\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.66 loaded\nBuilt: 2026-07-11T03:13:54.776Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.35\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.34';
+    const VERSION = '3.3.35';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -1439,6 +1439,7 @@
             #${TOOL_ID} {
                 position: fixed;
                 width: ${DOCK.width}px;
+                max-height: calc(100vh - 20px);
                 background: var(--sttk-panel-bg, #020617);
                 color: var(--sttk-panel-text, white);
                 z-index: 999999;
@@ -1469,8 +1470,18 @@
 
             #${TOOL_ID} #st-toolkit-body {
                 padding: 9px;
-                max-height: calc(100vh - 90px);
-                overflow-y: visible;
+                max-height: calc(100vh - 110px);
+                overflow-y: auto;
+                overscroll-behavior: contain;
+            }
+
+            #${TOOL_ID} #st-toolkit-body::-webkit-scrollbar {
+                width: 8px;
+            }
+
+            #${TOOL_ID} #st-toolkit-body::-webkit-scrollbar-thumb {
+                background: var(--sttk-panel-border, #475569);
+                border-radius: 8px;
             }
 
             #${TOOL_ID} #st-toolkit-body strong,
