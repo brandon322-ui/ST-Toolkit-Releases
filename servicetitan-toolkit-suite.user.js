@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.59
+// @version      1.0.62
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.59 loaded\nBuilt: 2026-07-10T23:01:38.383Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.31\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.62 loaded\nBuilt: 2026-07-11T02:41:45.213Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.33\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.31';
+    const VERSION = '3.3.33';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -908,15 +908,15 @@
     const RUNNER_HEARTBEAT_STALE_MS = 30000;
     const MATERIAL_CLEANUP_STALE_MS = 10 * 60 * 1000;
     const BATCH_QUEUE_MAX_ATTEMPTS = 3;
-    const BATCH_RUNNER_PAGE_SETTLE_MS = 1500;
-    const BATCH_RUNNER_DROPDOWN_OPEN_MS = 600;
-    const BATCH_RUNNER_DROPDOWN_SETTLE_MS = 900;
-    const BATCH_RUNNER_SELECTION_SETTLE_MS = 900;
-    const BATCH_RUNNER_SAVE_SETTLE_MS = 1200;
-    const BATCH_RUNNER_VERIFY_SETTLE_MS = 1200;
-    const BATCH_RUNNER_ADVANCE_SETTLE_MS = 1500;
-    const BATCH_RUNNER_CONTEXT_STABLE_MS = 3500;
-    const BATCH_RUNNER_POST_NAVIGATION_SETTLE_MS = 3000;
+    const BATCH_RUNNER_PAGE_SETTLE_MS = 300;
+    const BATCH_RUNNER_DROPDOWN_OPEN_MS = 100;
+    const BATCH_RUNNER_DROPDOWN_SETTLE_MS = 150;
+    const BATCH_RUNNER_SELECTION_SETTLE_MS = 150;
+    const BATCH_RUNNER_SAVE_SETTLE_MS = 250;
+    const BATCH_RUNNER_VERIFY_SETTLE_MS = 250;
+    const BATCH_RUNNER_ADVANCE_SETTLE_MS = 500;
+    const BATCH_RUNNER_CONTEXT_STABLE_MS = 1000;
+    const BATCH_RUNNER_POST_NAVIGATION_SETTLE_MS = 250;
     const BATCH_RUNNER_VERIFY_TIMEOUT_MS = 90000;
     const READINESS_DEBUG = false;
     const BATCH_QUEUE_DEBUG = false;
@@ -1166,6 +1166,22 @@
             ]));
     }
 
+    function createBatchRunnerAttemptId(invoiceId) {
+        return invoiceId + '-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    }
+
+    function getOwnedBatchRunnerAttempt(invoiceId, attemptId = null) {
+        const runner = Store.getRunner();
+        if (!runner?.running || runner.ownerTabId !== TAB_ID) return null;
+        if (!runner.remaining.includes(invoiceId)) return null;
+
+        if (attemptId) {
+            if (runner.currentInvoice !== invoiceId || runner.activeAttemptId !== attemptId) return null;
+        }
+
+        return runner;
+    }
+
     function normalizeRunner(runner) {
         if (!runner || typeof runner !== 'object' || Array.isArray(runner)) return null;
 
@@ -1199,6 +1215,7 @@
                     }))
                 : [],
             currentInvoice: typeof runner.currentInvoice === 'string' ? runner.currentInvoice : null,
+            activeAttemptId: typeof runner.activeAttemptId === 'string' ? runner.activeAttemptId : null,
             heartbeatAt: typeof runner.heartbeatAt === 'string' ? runner.heartbeatAt : null
         };
     }
@@ -1270,6 +1287,7 @@
             running: runner.running === true,
             ownerTabId: runner.ownerTabId,
             currentInvoice: runner.currentInvoice,
+            activeAttemptId: runner.activeAttemptId,
             remaining: [...(runner.remaining || [])],
             attempts: { ...(runner.attempts || {}) },
             successes: [...(runner.successes || [])],
@@ -2862,11 +2880,12 @@
         }
 
         if (isCurrentlyBatchedInServiceTitan()) {
+            const verifiedStatus = getServiceTitanBatchStatus();
             if (!preserveQueueUntilRunnerVerified) {
                 removeInvoiceFromReviewQueue(invoiceId, 'batch-current-already-batched');
                 clearReviewedTabMarker();
             }
-            return { skipped: true, invoiceNumber: invoiceId };
+            return { skipped: true, invoiceNumber: invoiceId, verified: true, verifiedStatus };
         }
 
         await sleep(BATCH_RUNNER_PAGE_SETTLE_MS);
@@ -2937,9 +2956,7 @@
             clearReviewedTabMarker();
         }
 
-        await sleep(BATCH_RUNNER_VERIFY_SETTLE_MS);
-
-        return { success: true, invoiceNumber: invoiceId };
+        return { success: true, invoiceNumber: invoiceId, verified: true, verifiedStatus: stBatch };
     }
 
     async function batchCurrentInvoiceManual() {
@@ -3010,6 +3027,7 @@
             successes: [],
             failures: [],
             currentInvoice: null,
+            activeAttemptId: null,
             startedAt: new Date().toISOString(),
             finishedAt: null
         });
@@ -3064,6 +3082,7 @@
             successes: [],
             failures: [],
             currentInvoice: null,
+            activeAttemptId: null,
             restartedAt: new Date().toISOString()
         }));
 
@@ -3132,26 +3151,52 @@
         return result.status;
     }
 
-    async function finishBatchRunnerInvoiceAttempt(invoiceId, batchResult) {
-        const updated = Store.getRunner();
-        if (!updated?.running || updated.ownerTabId !== TAB_ID) return false;
-        if (!updated.remaining.includes(invoiceId)) return false;
+    async function finishBatchRunnerInvoiceAttempt(invoiceId, batchResult, attemptId = null) {
+        const initialRunner = getOwnedBatchRunnerAttempt(invoiceId, attemptId);
+        if (!initialRunner) return false;
 
         const queueBefore = getQueueInvoiceNumbers();
         const statusBeforeVerification = getServiceTitanBatchStatus();
+        let verifiedStatus = null;
+        let verifyError = null;
 
-        try {
-            const verifiedStatus = await verifyBatchRunnerInvoiceBatched(invoiceId);
+        if (batchResult?.verified === true) {
+            verifiedStatus = batchResult.verifiedStatus || statusBeforeVerification;
+        } else {
+            try {
+                verifiedStatus = await verifyBatchRunnerInvoiceBatched(invoiceId);
+            } catch (err) {
+                verifyError = err;
+            }
+        }
+
+        const updated = getOwnedBatchRunnerAttempt(invoiceId, attemptId);
+        if (!updated) {
+            logBatchQueueDebug('invoice-finish-ignored-stale-attempt', {
+                invoiceId,
+                attemptId,
+                batchResult,
+                verifyError: verifyError?.message || null,
+                statusBeforeVerification,
+                verifiedStatus,
+                runnerAfterVerification: getRunnerDebugState()
+            });
+            return false;
+        }
+
+        updated.attempts = normalizeRunnerAttempts(updated.attempts);
+        delete updated.attempts[invoiceId];
+
+        if (!verifyError) {
             removeInvoiceFromReviewQueue(invoiceId, batchResult?.skipped
                 ? 'batch-queue-verified-already-batched'
                 : 'batch-queue-verified-batched');
-            updated.attempts = normalizeRunnerAttempts(updated.attempts);
-            delete updated.attempts[invoiceId];
             document.title = `✅ Batched - ${document.title}`;
             clearReviewedTabMarker();
             if (!updated.successes.includes(invoiceId)) updated.successes.push(invoiceId);
             logBatchQueueDebug('invoice-verified-success', {
                 invoiceId,
+                attemptId,
                 batchResult,
                 statusBeforeVerification,
                 verifiedStatus,
@@ -3159,15 +3204,14 @@
                 queueAfter: getQueueInvoiceNumbers(),
                 reason: batchResult?.skipped ? 'already verified batched' : 'verified batched after attempt'
             });
-        } catch (err) {
-            updated.attempts = normalizeRunnerAttempts(updated.attempts);
-            delete updated.attempts[invoiceId];
-            updated.failures.push({ invoiceNumber: invoiceId, error: err.message });
+        } else {
+            updated.failures.push({ invoiceNumber: invoiceId, error: verifyError.message });
             logBatchQueueDebug('invoice-kept-failure', {
                 invoiceId,
+                attemptId,
                 batchResult,
                 statusBeforeVerification,
-                error: err.message,
+                error: verifyError.message,
                 queueBefore,
                 queueAfter: getQueueInvoiceNumbers(),
                 reason: 'not verified batched'
@@ -3176,9 +3220,11 @@
 
         updated.remaining = updated.remaining.filter(n => n !== invoiceId);
         updated.currentInvoice = null;
+        updated.activeAttemptId = null;
         Store.saveRunner(stampRunnerHeartbeat(updated));
         logBatchQueueDebug('invoice-finished', {
             invoiceId,
+            attemptId,
             runnerAfter: getRunnerDebugState(updated)
         });
         return true;
@@ -3194,6 +3240,7 @@
             if (!nextUrl) {
                 updatedRunner.running = false;
                 updatedRunner.currentInvoice = null;
+                updatedRunner.activeAttemptId = null;
                 updatedRunner.failures.push({
                     invoiceNumber: nextInvoice,
                     error: 'Batch runner stopped because the stored invoice URL is missing.'
@@ -3210,6 +3257,8 @@
 
         if (updatedRunner?.ownerTabId === TAB_ID) {
             updatedRunner.running = false;
+            updatedRunner.currentInvoice = null;
+            updatedRunner.activeAttemptId = null;
             updatedRunner.finishedAt = new Date().toISOString();
 
             setToolkitMessage(`Batch run finished. Successful: ${updatedRunner.successes.length}. Failed: ${updatedRunner.failures.length}.`);
@@ -3254,7 +3303,6 @@
 
     async function continueBatchRunnerIfNeeded() {
         if (runnerBusy) {
-            await recoverBusyRunnerIfCurrentInvoiceIsBatched();
             return;
         }
 
@@ -3289,7 +3337,9 @@
 
         runnerBusy = true;
         try {
+            const attemptId = createBatchRunnerAttemptId(invoiceId);
             runner.currentInvoice = invoiceId;
+            runner.activeAttemptId = attemptId;
             Store.saveRunner(stampRunnerHeartbeat(runner));
             createBox();
 
@@ -3297,6 +3347,7 @@
                 const statusBeforeAttempt = getServiceTitanBatchStatus();
                 logBatchQueueDebug('invoice-attempt-start', {
                     invoiceId,
+                    attemptId,
                     queueBeforeAttempt: getQueueInvoiceNumbers(),
                     statusBeforeAttempt,
                     runnerBeforeAttempt: getRunnerDebugState(runner)
@@ -3317,16 +3368,16 @@
                 const statusAfterAttempt = getServiceTitanBatchStatus();
                 logBatchQueueDebug('invoice-attempt-result', {
                     invoiceId,
+                    attemptId,
                     batchResult,
                     statusBeforeAttempt,
                     statusAfterAttempt,
                     queueAfterAttemptBeforeVerification: getQueueInvoiceNumbers()
                 });
-                await finishBatchRunnerInvoiceAttempt(invoiceId, batchResult);
+                await finishBatchRunnerInvoiceAttempt(invoiceId, batchResult, attemptId);
             } catch (err) {
-                const updated = Store.getRunner();
-                if (!updated?.running || updated.ownerTabId !== TAB_ID) return;
-                if (!updated.remaining.includes(invoiceId)) return;
+                const updated = getOwnedBatchRunnerAttempt(invoiceId, attemptId);
+                if (!updated) return;
 
                 const queueBeforeFailure = getQueueInvoiceNumbers();
                 updated.attempts = normalizeRunnerAttempts(updated.attempts);
@@ -3335,11 +3386,13 @@
 
                 if (attemptCount < BATCH_QUEUE_MAX_ATTEMPTS) {
                     updated.currentInvoice = null;
+                    updated.activeAttemptId = null;
                     Store.saveRunner(stampRunnerHeartbeat(updated));
                     lastProcessedInvoice = null;
                     setToolkitMessage(`Batch runner will retry invoice ${invoiceId}. Attempt ${attemptCount} of ${BATCH_QUEUE_MAX_ATTEMPTS} failed: ${err.message}`);
                     logBatchQueueDebug('invoice-attempt-retry', {
                         invoiceId,
+                        attemptId,
                         attemptCount,
                         maxAttempts: BATCH_QUEUE_MAX_ATTEMPTS,
                         error: err.message,
@@ -3358,9 +3411,11 @@
                 delete updated.attempts[invoiceId];
                 updated.remaining = updated.remaining.filter(n => n !== invoiceId);
                 updated.currentInvoice = null;
+                updated.activeAttemptId = null;
                 Store.saveRunner(stampRunnerHeartbeat(updated));
                 logBatchQueueDebug('invoice-attempt-error', {
                     invoiceId,
+                    attemptId,
                     attemptCount,
                     maxAttempts: BATCH_QUEUE_MAX_ATTEMPTS,
                     error: err.message,
