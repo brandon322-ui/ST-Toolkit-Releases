@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.62
+// @version      1.0.64
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.62 loaded\nBuilt: 2026-07-11T02:41:45.213Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.33\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.64 loaded\nBuilt: 2026-07-11T03:10:50.953Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.34\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.33';
+    const VERSION = '3.3.34';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -2140,6 +2140,14 @@
         };
     }
 
+    function refreshBusinessUnitCheck(checks, businessUnitSource = {}) {
+        const liveBusinessUnitCheck = buildBusinessUnitCheck(businessUnitSource);
+        if (!Array.isArray(checks)) return [liveBusinessUnitCheck];
+
+        const withoutBusinessUnit = checks.filter(check => check?.id !== 'business-unit-location');
+        return [...withoutBusinessUnit, liveBusinessUnitCheck];
+    }
+
     const OperationalReadiness = {
         buildLoadingChecks(businessUnitSource = {}) {
             return [
@@ -2291,7 +2299,7 @@
                 };
             }
 
-            const checks = readiness.checks;
+            const checks = refreshBusinessUnitCheck(readiness.checks, businessUnitSource);
             const blockers = checks.filter(check => check.isBlocker && check.status !== 'pass');
             const errors = checks.filter(check => check.status === 'error');
 
