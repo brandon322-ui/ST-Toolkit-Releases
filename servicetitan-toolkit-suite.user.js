@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.73
+// @version      1.0.75
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.73 loaded\nBuilt: 2026-07-11T03:40:44.143Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.39\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.75 loaded\nBuilt: 2026-07-11T03:54:19.693Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.39';
+    const VERSION = '3.3.40';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -2639,6 +2639,14 @@
         const runner = Store.getRunner();
 
         if (!isRunnerHeartbeatStale(runner)) return false;
+        if (runner?.ownerTabId && runner.ownerTabId !== TAB_ID) {
+            logBatchQueueDebug('runner-stale-observed-non-owner', {
+                staleRunner: getRunnerDebugState(runner),
+                staleMs: RUNNER_HEARTBEAT_STALE_MS,
+                reason: 'non-owner tabs do not clear active batch runners'
+            });
+            return false;
+        }
 
         logBatchQueueDebug('runner-cleared-stale', {
             staleRunner: getRunnerDebugState(runner),
@@ -3579,7 +3587,7 @@
     function cancelBatchRunner() {
         const runner = Store.getRunner();
 
-        if (runner?.ownerTabId && runner.ownerTabId !== TAB_ID && !isRunnerHeartbeatStale(runner)) {
+        if (runner?.running && runner.ownerTabId && runner.ownerTabId !== TAB_ID) {
             setToolkitMessage('Batch runner is owned by another tab. Cancel it from the runner tab.');
             createBox();
             return;
@@ -3766,7 +3774,8 @@
             ? storedMessage
             : null;
         const materialCleanupRunning = materialCleanup?.running === true;
-        const batchRunnerActive = runner?.running === true && !isRunnerHeartbeatStale(runner);
+        const batchRunnerActive = runner?.running === true;
+        const runnerOwnedByThisTab = runner?.ownerTabId === TAB_ID;
         const disableForRunner = disabled => batchRunnerActive || disabled;
         const materialCleanupVisible = Boolean(
             materialCleanupRunning &&
@@ -3862,7 +3871,7 @@
                             <div>Remaining: ${runner.remaining?.length || 0}</div>
                             ${buttonRow([
                                 smallButton('st-retry-failed-btn', 'Retry Failed', disableForRunner(runner.running || !runner.failures?.length), 'st-btn-warning'),
-                                smallButton('st-cancel-batch-runner-btn', 'Cancel Runner', false, 'st-btn-danger')
+                                smallButton('st-cancel-batch-runner-btn', 'Cancel Runner', runner.running && !runnerOwnedByThisTab, 'st-btn-danger')
                             ])}
                             <div style="margin-top:7px;">
                                 ${smallButton('st-copy-batch-diagnostics-btn', 'Copy Diagnostics', false, 'st-btn-muted')}
