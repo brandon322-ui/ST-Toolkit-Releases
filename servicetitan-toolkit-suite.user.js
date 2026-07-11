@@ -10,7 +10,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite
 // @namespace    ST-Toolkits
-// @version      1.0.66
+// @version      1.0.69
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -20,7 +20,7 @@
 // ==/UserScript==
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite v1.0.66 loaded\nBuilt: 2026-07-11T03:13:54.776Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.35\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite v1.0.69 loaded\nBuilt: 2026-07-11T03:29:44.991Z\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.37\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -842,7 +842,7 @@
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.35';
+    const VERSION = '3.3.37';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -905,7 +905,7 @@
             '61772', '61774', '61727'
         ]
     };
-    const RUNNER_HEARTBEAT_STALE_MS = 30000;
+    const RUNNER_HEARTBEAT_STALE_MS = 2 * 60 * 1000;
     const MATERIAL_CLEANUP_STALE_MS = 10 * 60 * 1000;
     const BATCH_QUEUE_MAX_ATTEMPTS = 3;
     const BATCH_RUNNER_PAGE_SETTLE_MS = 300;
@@ -928,6 +928,8 @@
 
     let runnerBusy = false;
     let lastProcessedInvoice = null;
+    let lastRunnerHeartbeatRefreshAt = 0;
+    let lastMissingRunnerDiagnosticKey = null;
     let toolkitClosed = false;
     let dragState = null;
     let lastRenderedBadMaterialsCount = null;
@@ -1368,6 +1370,41 @@
             ...details,
             queue: getQueueInvoiceNumbers(),
             runner: getRunnerDebugState()
+        });
+    }
+
+    function getUnfinishedDiagnosticRunnerStart() {
+        const terminalEvents = new Set([
+            'runner-finish',
+            'runner-cancelled',
+            'runner-cleared-stale'
+        ]);
+
+        const diagnostics = getBatchDiagnostics();
+        for (let index = diagnostics.length - 1; index >= 0; index -= 1) {
+            const entry = diagnostics[index];
+            if (terminalEvents.has(entry?.event)) return null;
+            if (entry?.event === 'runner-start') return entry;
+        }
+
+        return null;
+    }
+
+    function logMissingRunnerWithQueueIfNeeded(queue) {
+        if (!Array.isArray(queue) || queue.length === 0) return;
+        if (Store.getRunner()) return;
+
+        const unfinishedStart = getUnfinishedDiagnosticRunnerStart();
+        if (!unfinishedStart) return;
+
+        const key = `${unfinishedStart.at}|${queue.map(item => item.invoiceNumber).join(',')}`;
+        if (key === lastMissingRunnerDiagnosticKey) return;
+        lastMissingRunnerDiagnosticKey = key;
+
+        logBatchQueueDebug('runner-missing-with-queue', {
+            queue: queue.map(item => item.invoiceNumber),
+            unfinishedRunnerStartAt: unfinishedStart.at,
+            unfinishedRunnerStart: unfinishedStart.details || null
         });
     }
 
@@ -1819,6 +1856,8 @@
                     activeElapsed += now - lastTick;
                 }
                 lastTick = now;
+
+                if (runnerBusy) refreshOwnedRunnerHeartbeat('wait-condition');
 
                 if (activeElapsed >= timeout) {
                     cleanup();
@@ -2511,6 +2550,26 @@
         };
     }
 
+    function refreshOwnedRunnerHeartbeat(reason = 'heartbeat', minIntervalMs = 5000) {
+        const now = Date.now();
+        if (minIntervalMs > 0 && now - lastRunnerHeartbeatRefreshAt < minIntervalMs) return false;
+
+        const runner = Store.getRunner();
+        if (!runner?.running || runner.ownerTabId !== TAB_ID) return false;
+
+        lastRunnerHeartbeatRefreshAt = now;
+        Store.saveRunner(stampRunnerHeartbeat(runner));
+
+        if (reason !== 'heartbeat' && reason !== 'wait-condition') {
+            logBatchQueueDebug('runner-heartbeat-refresh', {
+                reason,
+                runnerAfterHeartbeat: getRunnerDebugState()
+            });
+        }
+
+        return true;
+    }
+
     function isRunnerHeartbeatStale(runner) {
         if (!runner?.running) return false;
         if (runner.ownerTabId === TAB_ID) return false;
@@ -2535,6 +2594,10 @@
 
         if (!isRunnerHeartbeatStale(runner)) return false;
 
+        logBatchQueueDebug('runner-cleared-stale', {
+            staleRunner: getRunnerDebugState(runner),
+            staleMs: RUNNER_HEARTBEAT_STALE_MS
+        });
         Store.clearRunner();
         runnerBusy = false;
         lastProcessedInvoice = null;
@@ -3462,6 +3525,10 @@
             return;
         }
 
+        logBatchQueueDebug('runner-cancelled', {
+            runnerBeforeCancel: getRunnerDebugState(runner),
+            queueAtCancel: getQueueInvoiceNumbers()
+        });
         Store.clearRunner();
         runnerBusy = false;
         lastProcessedInvoice = null;
@@ -3625,6 +3692,7 @@
         let queue = Store.getQueue();
         const activeBatch = Store.getActiveBatch();
         const runner = Store.getRunner();
+        logMissingRunnerWithQueueIfNeeded(queue);
         const storedMessage = Store.getMessage();
         const sections = Store.getSections();
         const invoiceContext = getInvoiceContextState(invoiceId);
@@ -3835,6 +3903,25 @@
         continueBatchRunnerIfNeeded();
     }
 
+    function handleVisibilityChange() {
+        refreshOwnedRunnerHeartbeat('visibilitychange', 0);
+        logBatchQueueDebug('page-visibility-change', {
+            hidden: document.hidden === true,
+            runner: getRunnerDebugState()
+        });
+
+        if (!document.hidden) {
+            createBox();
+            continueBatchRunnerIfNeeded();
+        }
+    }
+
+    function handleWindowFocus() {
+        refreshOwnedRunnerHeartbeat('window-focus', 0);
+        createBox();
+        continueBatchRunnerIfNeeded();
+    }
+
     if (window.STToolkitCore?.register) {
         STToolkitCore.register({
             id: 'invoice-toolkit',
@@ -3871,7 +3958,9 @@
     setInterval(handleRouteChange, 1000);
     setInterval(refreshMaterialsIfChanged, 1500);
     setInterval(continueBatchRunnerIfNeeded, 2500);
-    window.addEventListener('focus', createBox);
+    setInterval(refreshOwnedRunnerHeartbeat, 5000);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleWindowFocus);
 })();
 
 
