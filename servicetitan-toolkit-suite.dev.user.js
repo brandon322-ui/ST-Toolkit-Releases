@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.78.202609071756
+// @version      1.0.78.202609071822
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -24,11 +24,11 @@
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
 const ST_TOOLKIT_SUITE_VERSION = "1.0.78";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "99aff05bcb7caafdb2bb817f1de0980fad2dc79c";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "03357f8a066c54891435d34441a276e8c6825744";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "03357f8";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.78 loaded\nBuilt: 2026-09-07T22:56:33.607Z\nSource: 99aff05bcb7caafdb2bb817f1de0980fad2dc79c\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.78 loaded\nBuilt: 2026-09-07T23:22:24.615Z\nSource: 03357f8a066c54891435d34441a276e8c6825744\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -858,6 +858,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
 
     const SELECTORS = {
         materialsRows: 'section.materials-table tbody tr',
+        equipmentRows: 'section.equipment-table tr',
+        equipmentNameCell: 'td[data-bind="text: Name"]',
         actionControls: 'button,a',
         batchSelects: 'select',
         materialDeleteIcon: 'i.icon-remove',
@@ -942,6 +944,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
     let toolkitClosed = false;
     let dragState = null;
     let lastRenderedBadMaterialsCount = null;
+    let equipmentReviewAcknowledgementInvoiceId = null;
     const readinessStateByInvoiceId = new Map();
     const readinessFetchByInvoiceId = new Map();
 
@@ -1002,6 +1005,23 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
     function getInvoiceDisplayLabel(invoiceId = getInvoiceId()) {
         const displayedInvoiceNumber = getDisplayedInvoiceNumber();
         return displayedInvoiceNumber || invoiceId || 'Unknown';
+    }
+
+    function getInvoiceEquipmentLineItemRows() {
+        return [...document.querySelectorAll(SELECTORS.equipmentRows)]
+            .filter(row => row.querySelector(SELECTORS.equipmentNameCell));
+    }
+
+    function getInvoiceEquipmentLineItemCount() {
+        return getInvoiceEquipmentLineItemRows().length;
+    }
+
+    function hasAcknowledgedInvoiceEquipment(invoiceId = getInvoiceId()) {
+        return Boolean(invoiceId && equipmentReviewAcknowledgementInvoiceId === invoiceId);
+    }
+
+    function setInvoiceEquipmentAcknowledgement(invoiceId = getInvoiceId(), acknowledged = false) {
+        equipmentReviewAcknowledgementInvoiceId = invoiceId && acknowledged ? invoiceId : null;
     }
 
     function getRenderedInvoiceInternalIdSignals() {
@@ -2879,6 +2899,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
             return false;
         }
 
+        const equipmentLineItemCount = getInvoiceEquipmentLineItemCount();
+        if (equipmentLineItemCount > 0 && !hasAcknowledgedInvoiceEquipment(invoiceId)) {
+            setToolkitMessage(`Review the ${equipmentLineItemCount} equipment line item${equipmentLineItemCount === 1 ? '' : 's'} on this invoice before marking reviewed.`);
+            createBox();
+            return false;
+        }
+
         const queue = Store.getQueue();
 
         if (!isInQueue(invoiceId)) {
@@ -3749,6 +3776,11 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
             'st-copy-batch-diagnostics-btn': copyBatchDiagnostics
         };
 
+        box.querySelector('#st-equipment-review-ack')?.addEventListener('change', event => {
+            setInvoiceEquipmentAcknowledgement(getInvoiceId(), event.target.checked === true);
+            createBox();
+        });
+
         box.addEventListener('click', event => {
             const toggle = event.target.closest('[data-st-toggle]');
 
@@ -3903,6 +3935,9 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
         const runnerStatus = getRunnerStatusText(runner);
         const batchDiagnosticsCount = getBatchDiagnostics().length;
         const showStandaloneBatchDiagnostics = batchDiagnosticsCount > 0 && !runner;
+        const equipmentLineItemCount = getInvoiceEquipmentLineItemCount();
+        const equipmentReviewAcknowledged = hasAcknowledgedInvoiceEquipment(invoiceId);
+        const equipmentReviewRequired = equipmentLineItemCount > 0 && !equipmentReviewAcknowledged;
 
         box.innerHTML = `
             ${buildHeader(batchRunnerActive)}
@@ -3971,8 +4006,15 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "99aff05";
                 ${sectionHeader(`Review Queue — ${queue.length} reviewed`, 'queue', sections.queue)}
                 ${sections.queue ? `
                     <div class="st-card">
+                        ${equipmentLineItemCount > 0 ? `
+                            <div class="st-msg">Review ${equipmentLineItemCount} equipment line item${equipmentLineItemCount === 1 ? '' : 's'} before marking this invoice reviewed.</div>
+                            <label class="st-small">
+                                <input id="st-equipment-review-ack" type="checkbox" ${equipmentReviewAcknowledged ? 'checked' : ''}>
+                                I reviewed the equipment line items and want to leave them on this invoice.
+                            </label>
+                        ` : ''}
                         ${buttonRow([
-                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || !invoiceId), 'st-btn-success'),
+                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || equipmentReviewRequired || !invoiceId), 'st-btn-success'),
                             smallButton('st-remove-reviewed-btn', 'Remove', disableForRunner(!invoiceId), 'st-btn-secondary')
                         ])}
                         ${buttonRow([
