@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.79.202609071825
+// @version      1.0.79.202609071838
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -24,11 +24,11 @@
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
 const ST_TOOLKIT_SUITE_VERSION = "1.0.79";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "4e07583f921a512d03dcd5ba137583475e189a56";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "2d787cc9e9e9fe5dc791dca84edbc76550ae1aba";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "2d787cc";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.79 loaded\nBuilt: 2026-09-07T23:25:55.695Z\nSource: 4e07583f921a512d03dcd5ba137583475e189a56\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.79 loaded\nBuilt: 2026-09-07T23:38:29.832Z\nSource: 2d787cc9e9e9fe5dc791dca84edbc76550ae1aba\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -4172,6 +4172,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
   let manualLauncherOpen = false;
   let lastRouteKey = location.href;
   let automaticComparisonPending = false;
+  let automaticSuggestionRunPending = false;
 
   const ST = {
     equipmentRows: 'tr[role="row"][data-grid-row-index]',
@@ -4536,11 +4537,17 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const state = getState();
       const addBtn = e.target.closest('[data-add-index]');
       const autoAddBtn = e.target.closest('[data-auto-add-index]');
+      const applyAllAutoBtn = e.target.closest('#st-ea3-apply-all-auto');
       const updateBtn = e.target.closest('[data-update-index]');
       const autoUpdateBtn = e.target.closest('[data-auto-update-index]');
       const reviewBtn = e.target.closest('[data-review-index]');
       const dismissFindingBtn = e.target.closest('[data-dismiss-finding-index]');
       const dismissComparisonBtn = e.target.closest('[data-dismiss-comparison-index]');
+
+      if (applyAllAutoBtn) {
+        void applyAllAutomaticSuggestions();
+        return;
+      }
 
       if (dismissFindingBtn) {
         dismissFinding(state?.findings?.[Number(dismissFindingBtn.dataset.dismissFindingIndex)]);
@@ -5695,6 +5702,64 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
     return /\bmw (?:installed equip|equip registered)\b/i.test(normalizeSpaces(row?.tags || ''));
   }
 
+  function getAutomaticSuggestionActions(comparisons = []) {
+    return (comparisons || []).flatMap((comparison, index) => {
+      if (comparison?.action === 'ADD REQUIRED' && comparison.finding) {
+        return [{ index, type: 'add', comparison }];
+      }
+
+      if (comparison?.action === 'UPDATE REQUIRED' && comparison.finding && comparison.row) {
+        return [{ index, type: 'update', comparison }];
+      }
+
+      return [];
+    });
+  }
+
+  async function applyAllAutomaticSuggestions() {
+    if (automaticSuggestionRunPending) return;
+
+    const state = getState();
+    const actions = getAutomaticSuggestionActions(state?.comparisons || []);
+
+    if (!actions.length) {
+      status('No automatic suggestions available.');
+      return;
+    }
+
+    let applied = 0;
+    let failed = 0;
+
+    automaticSuggestionRunPending = true;
+    status(`Applying ${actions.length} automatic suggestion(s)...`);
+
+    try {
+      for (const action of actions) {
+        const { comparison } = action;
+
+        try {
+          const ok = action.type === 'add'
+            ? await prepareAdd(comparison.finding, true)
+            : await prepareUpdate(comparison.finding, comparison.row, true);
+
+          if (ok) applied++;
+          else failed++;
+        } catch (err) {
+          failed++;
+          status(`Auto ${action.type} failed for ${comparison.finding?.equipment || 'equipment'}: ${err?.message || err}`);
+        }
+      }
+
+      status(
+        failed
+          ? `Applied ${applied} automatic suggestion(s). ${failed} failed; review remaining items before retrying.`
+          : `Applied ${applied} automatic suggestion(s).`
+      );
+    } finally {
+      automaticSuggestionRunPending = false;
+    }
+  }
+
   async function prepareAdd(finding, autoSave = false) {
     setBusy(true);
 
@@ -5705,7 +5770,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const addButton = findAddEquipmentButton();
       if (!addButton) {
         status('Could not find Add Equipment button.');
-        return;
+        return false;
       }
 
       addButton.click();
@@ -5713,7 +5778,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const drawer = await waitForAddDrawer(7000);
       if (!drawer) {
         status('Add Equipment drawer did not open.');
-        return;
+        return false;
       }
 
       const nameOk = fillEquipmentName(finding.equipment, drawer);
@@ -5722,19 +5787,19 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
 
       if (!nameOk || !dateOk || !typeOk) {
         status(`Prepared ${finding.equipment}, but one or more fields failed. Name: ${nameOk ? 'OK' : 'FAILED'}, Date: ${dateOk ? 'OK' : 'FAILED'}, Type: ${typeOk ? 'OK' : 'FAILED'}. Review manually.`);
-        return;
+        return false;
       }
 
       if (!autoSave) {
         status(`Prepared ${finding.equipment}. Review and click Add manually.`);
-        return;
+        return true;
       }
 
       const expectedDate = normalizeDate(finding.date);
       const verification = verifyAddEquipmentFields(finding, drawer);
       if (!verification.name || !verification.date || !verification.type) {
         status(`Auto Add stopped. Final verification failed. Name: ${verification.name ? 'OK' : 'FAILED'}, Date: ${verification.date ? 'OK' : 'FAILED'}, Type: ${verification.type ? 'OK' : 'FAILED'}.`);
-        return;
+        return false;
       }
 
       const addRoot = drawer.closest('.Drawer') || drawer;
@@ -5745,7 +5810,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
 
       if (!addFinal) {
         status('Auto Add stopped. Add button was not enabled.');
-        return;
+        return false;
       }
 
       addFinal.click();
@@ -5754,11 +5819,12 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const savedRow = await waitForAddedEquipment(finding, matchingRowsBeforeAdd);
       if (!savedRow) {
         status(`Auto Add was clicked, but the toolkit could not verify ${finding.equipment} with installed date ${expectedDate}. Refresh the table and compare again before retrying.`);
-        return;
+        return false;
       }
 
       refreshEquipmentComparisons();
       status(`Auto Add verified. ${finding.equipment} now shows installed date ${expectedDate}.`);
+      return true;
     } finally {
       setBusy(false);
     }
@@ -5773,7 +5839,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const rowEl = findRowElement(row);
       if (!rowEl) {
         status(`Could not locate the ${row.equipment} equipment row.`);
-        return;
+        return false;
       }
 
       rowEl.scrollIntoView({ block: 'center' });
@@ -5781,14 +5847,14 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const menuButton = findRowMenuButton(rowEl);
       if (!menuButton) {
         status(`Found ${row.equipment} row, but could not find row menu button.`);
-        return;
+        return false;
       }
 
       menuButton.click();
       const editItem = await waitUntil(() => findMenuItem('Edit'), 4000);
       if (!editItem) {
         status('Opened row menu, but could not find Edit.');
-        return;
+        return false;
       }
 
       editItem.click();
@@ -5796,7 +5862,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const detailsDrawer = await waitForDetailsDrawer(7000);
       if (!detailsDrawer) {
         status('Equipment details drawer did not open.');
-        return;
+        return false;
       }
 
       const editButton = await waitUntil(
@@ -5805,7 +5871,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       );
       if (!editButton) {
         status('Equipment details drawer opened, but could not find edit pencil.');
-        return;
+        return false;
       }
 
       editButton.click();
@@ -5813,25 +5879,25 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const editMode = await waitForEditMode(7000);
       if (!editMode) {
         status('Edit mode did not open.');
-        return;
+        return false;
       }
 
       const dateOk = fillEditInstalledDate(finding.date, editMode);
       if (!dateOk) {
         status('Edit form opened, but could not update Installed On date field.');
-        return;
+        return false;
       }
 
       if (!autoSave) {
         status(`Prepared ${row.equipment} update to ${finding.date}. Review and click Save Changes manually.`);
-        return;
+        return true;
       }
 
       status('Auto Update filled the date. Waiting for ServiceTitan to commit the field...');
       const committedInput = await waitForStableInstalledDate(editMode, finding.date);
       if (!committedInput) {
         status('Auto Update stopped. The Installed On date did not remain stable long enough to save safely.');
-        return;
+        return false;
       }
 
       status('Installed On is stable. Waiting for Save Changes to become available...');
@@ -5843,7 +5909,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
 
       if (!saveButton) {
         status('Auto Update stopped. The Installed On date or Save Changes action could not be verified.');
-        return;
+        return false;
       }
 
       saveButton.click();
@@ -5852,11 +5918,12 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       const savedRow = await waitForSavedEquipment(finding, row);
       if (!savedRow) {
         status(`Auto Update was clicked, but the toolkit could not verify ${row.equipment} with installed date ${normalizeDate(finding.date)}. Refresh the table and compare again before retrying.`);
-        return;
+        return false;
       }
 
       refreshEquipmentComparisons();
       status(`Auto Update verified. ${row.equipment} now shows installed date ${normalizeDate(finding.date)}.`);
+      return true;
     } finally {
       setBusy(false);
     }
@@ -6428,6 +6495,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
   }
 
   function renderComparisons(comparisons) {
+    const automaticActions = getAutomaticSuggestionActions(comparisons);
     const counts = comparisons.reduce((summary, comparison) => {
       summary[comparison.action] = (summary[comparison.action] || 0) + 1;
       return summary;
@@ -6442,6 +6510,9 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
       <div class="st-ea3-summary">
         ${comparisons.length} finding(s) · ${needsAttention} need attention · ${noChange} no change · ${protectedCount} protected
       </div>
+      <button id="st-ea3-apply-all-auto" class="st-ea3-action st-ea3-apply-all" ${automaticActions.length && !automaticSuggestionRunPending ? '' : 'disabled'}>
+        Apply All Auto Suggestions (${automaticActions.length})
+      </button>
       ${comparisons.map(renderComparisonCard).join('')}
     `;
   }
@@ -6662,7 +6733,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4e07583";
   }
 
   function setBusy(isBusy) {
-    document.querySelectorAll('#st-ea3-body button, .st-ea3-action, .st-ea3-update')
+    document.querySelectorAll('#st-ea3-body button, .st-ea3-action, .st-ea3-update, .st-ea3-apply-all')
       .forEach(btn => {
         btn.disabled = isBusy;
         btn.style.opacity = isBusy ? '0.6' : '';
