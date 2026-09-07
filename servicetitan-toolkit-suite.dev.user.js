@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.79.202609071838
+// @version      1.0.80.202609071845
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.79";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "2d787cc9e9e9fe5dc791dca84edbc76550ae1aba";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "2d787cc";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.80";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "85331463cc75d1f78f39f671951d10b93506fac3";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.79 loaded\nBuilt: 2026-09-07T23:38:29.832Z\nSource: 2d787cc9e9e9fe5dc791dca84edbc76550ae1aba\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.80 loaded\nBuilt: 2026-09-07T23:45:08.643Z\nSource: 85331463cc75d1f78f39f671951d10b93506fac3\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
