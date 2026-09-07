@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.77.202607122027
+// @version      1.0.77.202609071742
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -24,11 +24,11 @@
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
 const ST_TOOLKIT_SUITE_VERSION = "1.0.77";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "fe4b6165b812422e17094245ad95a785ae6738c3";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "fe4b616";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "4c2caa55e9dde3b00bd13c644026e6c40b44a3e3";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "4c2caa5";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.77 loaded\nBuilt: 2026-07-13T01:27:15.067Z\nSource: fe4b6165b812422e17094245ad95a785ae6738c3\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.77 loaded\nBuilt: 2026-09-07T22:42:24.108Z\nSource: 4c2caa55e9dde3b00bd13c644026e6c40b44a3e3\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -2643,6 +2643,14 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "fe4b616";
             : 'Running in another tab';
     }
 
+    function clearBatchRunnerState(message) {
+        Store.clearRunner();
+        runnerBusy = false;
+        lastProcessedInvoice = null;
+        clearOwnedRunnerSnapshot();
+        setToolkitMessage(message);
+    }
+
     function cleanupStaleRunner() {
         const runner = Store.getRunner();
 
@@ -2660,11 +2668,51 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "fe4b616";
             staleRunner: getRunnerDebugState(runner),
             staleMs: RUNNER_HEARTBEAT_STALE_MS
         });
-        Store.clearRunner();
-        runnerBusy = false;
-        lastProcessedInvoice = null;
-        clearOwnedRunnerSnapshot();
-        setToolkitMessage('Cleared stale batch runner from a closed tab.');
+        clearBatchRunnerState('Cleared stale batch runner from a closed tab.');
+        return true;
+    }
+
+    function matchesStaleRunnerRecoveryCandidate(candidate, savedRunner) {
+        return Boolean(
+            candidate?.running &&
+            savedRunner?.running &&
+            candidate.ownerTabId &&
+            candidate.ownerTabId !== TAB_ID &&
+            savedRunner.ownerTabId === candidate.ownerTabId &&
+            savedRunner.activeAttemptId === candidate.activeAttemptId &&
+            savedRunner.heartbeatAt === candidate.heartbeatAt &&
+            isRunnerHeartbeatStale(savedRunner)
+        );
+    }
+
+    function clearStaleBatchRunner(options = {}) {
+        const shouldRender = options.render !== false;
+        const staleRunner = Store.getRunner();
+
+        if (!isRunnerHeartbeatStale(staleRunner) || staleRunner?.ownerTabId === TAB_ID) {
+            setToolkitMessage('Batch runner is no longer stale.');
+            if (shouldRender) createBox();
+            return false;
+        }
+
+        const savedRunner = Store.getRunner();
+        if (!matchesStaleRunnerRecoveryCandidate(staleRunner, savedRunner)) {
+            logBatchQueueDebug('runner-clear-stale-aborted', {
+                staleRunner: getRunnerDebugState(staleRunner),
+                savedRunner: getRunnerDebugState(savedRunner),
+                reason: 'runner changed before stale recovery clear'
+            });
+            setToolkitMessage('Batch runner changed before stale recovery could clear it.');
+            if (shouldRender) createBox();
+            return false;
+        }
+
+        logBatchQueueDebug('runner-cleared-stale', {
+            staleRunner: getRunnerDebugState(savedRunner),
+            staleMs: RUNNER_HEARTBEAT_STALE_MS
+        });
+        clearBatchRunnerState('Cleared stale batch runner from a closed tab.');
+        if (shouldRender) createBox();
         return true;
     }
 
@@ -3697,6 +3745,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "fe4b616";
             'st-batch-reviewed-queue-btn': startBatchReviewedQueue,
             'st-retry-failed-btn': retryFailedInvoices,
             'st-cancel-batch-runner-btn': cancelBatchRunner,
+            'st-clear-stale-runner-btn': clearStaleBatchRunner,
             'st-copy-batch-diagnostics-btn': copyBatchDiagnostics
         };
 
@@ -3713,6 +3762,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "fe4b616";
             if (
                 state.batchRunnerActive &&
                 button.id !== 'st-cancel-batch-runner-btn' &&
+                button.id !== 'st-clear-stale-runner-btn' &&
                 button.id !== 'st-copy-batch-diagnostics-btn'
             ) return;
 
@@ -3784,6 +3834,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "fe4b616";
         const materialCleanupRunning = materialCleanup?.running === true;
         const batchRunnerActive = runner?.running === true;
         const runnerOwnedByThisTab = runner?.ownerTabId === TAB_ID;
+        const runnerStaleFromOtherTab = batchRunnerActive && !runnerOwnedByThisTab && isRunnerHeartbeatStale(runner);
         const disableForRunner = disabled => batchRunnerActive || disabled;
         const materialCleanupVisible = Boolean(
             materialCleanupRunning &&
@@ -3879,7 +3930,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "fe4b616";
                             <div>Remaining: ${runner.remaining?.length || 0}</div>
                             ${buttonRow([
                                 smallButton('st-retry-failed-btn', 'Retry Failed', disableForRunner(runner.running || !runner.failures?.length), 'st-btn-warning'),
-                                smallButton('st-cancel-batch-runner-btn', 'Cancel Runner', runner.running && !runnerOwnedByThisTab, 'st-btn-danger')
+                                smallButton('st-cancel-batch-runner-btn', 'Cancel Runner', runner.running && !runnerOwnedByThisTab, 'st-btn-danger'),
+                                runnerStaleFromOtherTab
+                                    ? smallButton('st-clear-stale-runner-btn', 'Clear Stale Runner', false, 'st-btn-warning')
+                                    : ''
                             ])}
                             <div style="margin-top:7px;">
                                 ${smallButton('st-copy-batch-diagnostics-btn', 'Copy Diagnostics', false, 'st-btn-muted')}
