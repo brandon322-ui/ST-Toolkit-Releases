@@ -1,11 +1,11 @@
 {
   "channel": "DEV",
-  "userscriptVersion": "1.0.80.202609071845",
-  "suiteVersion": "1.0.80",
-  "declaredSourceSuiteVersion": "1.0.80",
-  "sourceCommitSha": "85331463cc75d1f78f39f671951d10b93506fac3",
-  "shortSourceCommitSha": "8533146",
-  "artifactSha256": "05686cc1ce90d5db4747d0afcbf55ee94f4ae55e22fe3b6f22cc721807cc353c",
-  "buildTime": "2026-09-07T23:45:08.684Z",
+  "userscriptVersion": "1.0.81.202609121325",
+  "suiteVersion": "1.0.81",
+  "declaredSourceSuiteVersion": "1.0.81",
+  "sourceCommitSha": "6a145094cc20ac235d284ae65cbb0874d8025e35",
+  "shortSourceCommitSha": "6a14509",
+  "artifactSha256": "12447204a799df105f4210fc0e86d596ba02a21f7f4ddeba175d6a646f142939",
+  "buildTime": "2026-09-12T18:25:59.484Z",
   "publishedFilename": "servicetitan-toolkit-suite.dev.user.js"
 }

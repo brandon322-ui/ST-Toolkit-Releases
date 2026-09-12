@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.80.202609071845
+// @version      1.0.81.202609121325
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.80";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "85331463cc75d1f78f39f671951d10b93506fac3";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.81";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "6a145094cc20ac235d284ae65cbb0874d8025e35";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.80 loaded\nBuilt: 2026-09-07T23:45:08.643Z\nSource: 85331463cc75d1f78f39f671951d10b93506fac3\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.40\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.81 loaded\nBuilt: 2026-09-12T18:25:59.415Z\nSource: 6a145094cc20ac235d284ae65cbb0874d8025e35\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.41\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -850,7 +850,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.40';
+    const VERSION = '3.3.41';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -877,6 +877,52 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
     const TOOLKIT_DOCKED_KEY = 'st_toolkit_docked';
     const TAB_ID_KEY = 'st_toolkit_tab_id';
     const REVIEWED_TAB_MARKER_KEY = 'st_reviewed_tab_marker';
+
+    const RECALL_WARRANTY_DIRECT_TRIGGERS = [
+        'warranty callback',
+        'warranty call',
+        'warranty visit',
+        'warranty repair',
+        'warranty replacement',
+        'warranty claim',
+        'replaced under warranty',
+        'repaired under warranty',
+        'covered under warranty',
+        'no charge warranty',
+        'recall',
+        'callback',
+        'call back'
+    ];
+    const RECALL_WARRANTY_PRIOR_WORK_TERMS = [
+        'our previous repair',
+        'our previous visit',
+        'our previous install',
+        'previous repair',
+        'previous visit',
+        'previous install',
+        'we installed',
+        'we replaced',
+        'we repaired',
+        'our install',
+        'our repair',
+        'return visit',
+        'back out',
+        'returned to',
+        'came back'
+    ];
+    const RECALL_WARRANTY_REPEAT_PROBLEM_TERMS = [
+        'same issue',
+        'same problem',
+        'still having',
+        'still not',
+        'not fixed',
+        'issue returned',
+        'problem returned',
+        'failed again',
+        'not working again',
+        'leaking again',
+        'back to repair'
+    ];
 
     const DOCK = {
         top: 50,
@@ -945,8 +991,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
     let dragState = null;
     let lastRenderedBadMaterialsCount = null;
     let equipmentReviewAcknowledgementInvoiceId = null;
+    let recallWarrantyAcknowledgementInvoiceId = null;
     const readinessStateByInvoiceId = new Map();
     const readinessFetchByInvoiceId = new Map();
+    const recallWarrantyReviewByInvoiceId = new Map();
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1005,6 +1053,127 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
     function getInvoiceDisplayLabel(invoiceId = getInvoiceId()) {
         const displayedInvoiceNumber = getDisplayedInvoiceNumber();
         return displayedInvoiceNumber || invoiceId || 'Unknown';
+    }
+
+    function normalizeRecallWarrantyText(value) {
+        return String(value ?? '')
+            .normalize('NFKC')
+            .toLowerCase()
+            .replace(/[^\p{L}\p{N}]+/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function splitRecallWarrantyContexts(summary) {
+        return String(summary ?? '')
+            .split(/\n+/)
+            .flatMap(paragraph => paragraph.split(/(?<=[.!?])\s+/))
+            .map(normalizeRecallWarrantyText)
+            .filter(Boolean);
+    }
+
+    function findRecallWarrantyTerms(context, terms) {
+        const matches = terms.filter(term => {
+            const normalizedTerm = normalizeRecallWarrantyText(term);
+            const pattern = normalizedTerm
+                .split(' ')
+                .map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                .join('\\s+');
+            return new RegExp(`\\b${pattern}\\b`, 'i').test(context);
+        });
+
+        return matches.filter(term => !matches.some(other =>
+            other !== term && normalizeRecallWarrantyText(other).includes(normalizeRecallWarrantyText(term))
+        ));
+    }
+
+    function detectRecallWarrantyLanguage(summary) {
+        const contexts = splitRecallWarrantyContexts(summary);
+        const directTerms = [...new Set(contexts.flatMap(context =>
+            findRecallWarrantyTerms(context, RECALL_WARRANTY_DIRECT_TRIGGERS)
+        ))];
+
+        if (directTerms.length) {
+            return { triggered: true, type: 'direct', matchedTerms: directTerms };
+        }
+
+        for (const context of contexts) {
+            const priorWorkTerms = findRecallWarrantyTerms(context, RECALL_WARRANTY_PRIOR_WORK_TERMS);
+            const repeatProblemTerms = findRecallWarrantyTerms(context, RECALL_WARRANTY_REPEAT_PROBLEM_TERMS);
+            if (priorWorkTerms.length && repeatProblemTerms.length) {
+                return {
+                    triggered: true,
+                    type: 'contextual',
+                    matchedTerms: [priorWorkTerms[0], repeatProblemTerms[0]]
+                };
+            }
+        }
+
+        return { triggered: false, type: null, matchedTerms: [] };
+    }
+
+    function collectInvoiceSummaryText(invoiceData) {
+        if (!invoiceData || typeof invoiceData !== 'object' || Array.isArray(invoiceData)) return '';
+        return [...new Set(Object.entries(invoiceData)
+            .filter(([key, value]) => /^(?:invoice)?summary(?:text)?$/i.test(key) && typeof value === 'string' && value.trim())
+            .map(([, value]) => value.trim()))].join('\n\n');
+    }
+
+    function storeInvoiceRecallWarrantyReview(invoiceId, invoiceData) {
+        const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
+            ? String(invoiceData.Id)
+            : null;
+        if (invoiceDataId !== invoiceId) {
+            recallWarrantyReviewByInvoiceId.set(invoiceId, { status: 'error', message: 'Invoice ID mismatch' });
+            return;
+        }
+
+        const summary = collectInvoiceSummaryText(invoiceData);
+        recallWarrantyReviewByInvoiceId.set(invoiceId, {
+            status: 'ready',
+            summary,
+            ...detectRecallWarrantyLanguage(summary)
+        });
+    }
+
+    function getInvoiceRecallWarrantyReview(invoiceId = getInvoiceId()) {
+        return invoiceId ? recallWarrantyReviewByInvoiceId.get(invoiceId) || null : null;
+    }
+
+    function hasAcknowledgedInvoiceRecallWarranty(invoiceId = getInvoiceId()) {
+        if (!invoiceId) return false;
+        return recallWarrantyAcknowledgementInvoiceId === invoiceId || Store.getQueue().some(item =>
+            item.invoiceNumber === invoiceId && item.recallWarrantyAcknowledged === true
+        );
+    }
+
+    function setInvoiceRecallWarrantyAcknowledgement(invoiceId = getInvoiceId(), acknowledged = false) {
+        if (!invoiceId) return;
+        recallWarrantyAcknowledgementInvoiceId = acknowledged ? invoiceId : null;
+        const queue = Store.getQueue();
+        const item = queue.find(entry => entry.invoiceNumber === invoiceId);
+        if (!item) return;
+        if (acknowledged) item.recallWarrantyAcknowledged = true;
+        else delete item.recallWarrantyAcknowledged;
+        Store.saveQueue(queue);
+    }
+
+    function validateInvoiceRecallWarrantyReview(invoiceId = getInvoiceId()) {
+        const review = getInvoiceRecallWarrantyReview(invoiceId);
+        if (!review || review.status !== 'ready') {
+            return {
+                allowed: false,
+                message: 'Cannot complete review until the invoice summary has been checked.'
+            };
+        }
+        if (!review.triggered || hasAcknowledgedInvoiceRecallWarranty(invoiceId)) {
+            return { allowed: true, review };
+        }
+        return {
+            allowed: false,
+            review,
+            message: 'Acknowledge the Possible Recall / Warranty review before marking this invoice reviewed or batching it.'
+        };
     }
 
     function getInvoiceEquipmentLineItemRows() {
@@ -1166,7 +1335,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
             return [{
                 invoiceNumber,
                 url: cleanInvoiceUrl(item.url),
-                reviewedAt: typeof item.reviewedAt === 'string' ? item.reviewedAt : null
+                reviewedAt: typeof item.reviewedAt === 'string' ? item.reviewedAt : null,
+                ...(item.recallWarrantyAcknowledged === true ? { recallWarrantyAcknowledged: true } : {})
             }];
         });
     }
@@ -2427,6 +2597,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
 
         const fetchPromise = fetchInvoiceData(invoiceId)
             .then(invoiceData => {
+                storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
                 const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
                     ? String(invoiceData.Id)
                     : null;
@@ -2460,6 +2631,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
                 if (READINESS_DEBUG) console.log('[readiness] save-memory', invoiceId, readiness);
             })
             .catch(err => {
+                recallWarrantyReviewByInvoiceId.set(invoiceId, {
+                    status: 'error',
+                    message: err?.message || 'Invoice summary could not be checked'
+                });
                 const readiness = {
                     invoiceId,
                     checks: [
@@ -2491,6 +2666,28 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
             });
 
         readinessFetchByInvoiceId.set(invoiceId, fetchPromise);
+    }
+
+    async function ensureInvoiceRecallWarrantyReview(invoiceId) {
+        const current = getInvoiceRecallWarrantyReview(invoiceId);
+        if (current?.status === 'ready' || current?.status === 'error') return current;
+
+        const readinessFetch = readinessFetchByInvoiceId.get(invoiceId);
+        if (readinessFetch) {
+            await readinessFetch;
+            return getInvoiceRecallWarrantyReview(invoiceId);
+        }
+
+        try {
+            const invoiceData = await fetchInvoiceData(invoiceId);
+            storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
+        } catch (err) {
+            recallWarrantyReviewByInvoiceId.set(invoiceId, {
+                status: 'error',
+                message: err?.message || 'Invoice summary could not be checked'
+            });
+        }
+        return getInvoiceRecallWarrantyReview(invoiceId);
     }
 
     function getInvoiceMaterials(invoiceData) {
@@ -2899,6 +3096,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
             return false;
         }
 
+        const recallWarrantyGate = validateInvoiceRecallWarrantyReview(invoiceId);
+        if (!recallWarrantyGate.allowed) {
+            setToolkitMessage(recallWarrantyGate.message);
+            createBox();
+            return false;
+        }
+
         const equipmentLineItemCount = getInvoiceEquipmentLineItemCount();
         if (equipmentLineItemCount > 0 && !hasAcknowledgedInvoiceEquipment(invoiceId)) {
             setToolkitMessage(`Review the ${equipmentLineItemCount} equipment line item${equipmentLineItemCount === 1 ? '' : 's'} on this invoice before marking reviewed.`);
@@ -2912,7 +3116,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
             queue.push({
                 invoiceNumber: invoiceId,
                 url: cleanInvoiceUrl(window.location.href),
-                reviewedAt: new Date().toISOString()
+                reviewedAt: new Date().toISOString(),
+                ...(recallWarrantyGate.review?.triggered && hasAcknowledgedInvoiceRecallWarranty(invoiceId)
+                    ? { recallWarrantyAcknowledged: true }
+                    : {})
             });
             Store.saveQueue(queue);
         }
@@ -3082,6 +3289,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
                 `Invoice page has not finished loading invoice ${invoiceId}. URL invoice: ${invoiceContext.invoiceId || 'unknown'}. Displayed invoice number: ${invoiceContext.displayedInvoiceNumber || 'unknown'}.`
             );
         }
+
+        await ensureInvoiceRecallWarrantyReview(invoiceId);
+        const recallWarrantyGate = validateInvoiceRecallWarrantyReview(invoiceId);
+        if (!recallWarrantyGate.allowed) throw new Error(recallWarrantyGate.message);
 
         if (!skipReadinessCheck) {
             const readinessState = getOperationalReadinessState(invoiceId);
@@ -3780,6 +3991,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
             setInvoiceEquipmentAcknowledgement(getInvoiceId(), event.target.checked === true);
             createBox();
         });
+        box.querySelector('#st-recall-warranty-review-ack')?.addEventListener('change', event => {
+            setInvoiceRecallWarrantyAcknowledgement(getInvoiceId(), event.target.checked === true);
+            createBox();
+        });
 
         box.addEventListener('click', event => {
             const toggle = event.target.closest('[data-st-toggle]');
@@ -3938,6 +4153,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
         const equipmentLineItemCount = getInvoiceEquipmentLineItemCount();
         const equipmentReviewAcknowledged = hasAcknowledgedInvoiceEquipment(invoiceId);
         const equipmentReviewRequired = equipmentLineItemCount > 0 && !equipmentReviewAcknowledged;
+        const recallWarrantyReview = getInvoiceRecallWarrantyReview(invoiceId);
+        const recallWarrantyTriggered = recallWarrantyReview?.status === 'ready' && recallWarrantyReview.triggered;
+        const recallWarrantyAcknowledged = hasAcknowledgedInvoiceRecallWarranty(invoiceId);
+        const recallWarrantyMatchedTerms = recallWarrantyReview?.matchedTerms || [];
 
         box.innerHTML = `
             ${buildHeader(batchRunnerActive)}
@@ -4000,6 +4219,18 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8533146";
                             smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceId || badMaterialsCount === 0), 'st-btn-action'),
                             smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || !invoiceId || badMaterialsCount === 0), 'st-btn-success')
                         ])}
+                    </div>
+                ` : ''}
+
+                ${recallWarrantyTriggered ? `
+                    <div class="st-card st-msg st-recall-warranty-warning">
+                        <strong>⚠ Possible Recall / Warranty</strong><br>
+                        This invoice may represent a recall, callback, or warranty-related visit.<br>
+                        <span class="st-small">Detected: ${recallWarrantyMatchedTerms.map(term => `&quot;${escapeHtml(term)}&quot;`).join(' + ')}</span><br>
+                        <label class="st-small">
+                            <input id="st-recall-warranty-review-ack" type="checkbox" ${recallWarrantyAcknowledged ? 'checked' : ''}>
+                            I verified this invoice and updated the Recall/Warranty classification in ServiceTitan if needed.
+                        </label>
                     </div>
                 ` : ''}
 
