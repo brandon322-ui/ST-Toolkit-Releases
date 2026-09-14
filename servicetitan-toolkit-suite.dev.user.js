@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.82.202609141253
+// @version      1.0.83.202609141401
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.82";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "318da577292a9ad0ae70ce004393876be720955e";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.83";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "1842361c0e760daaf614fc81dc0ae16019b023a2";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.82 loaded\nBuilt: 2026-09-14T17:53:33.586Z\nSource: 318da577292a9ad0ae70ce004393876be720955e\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.83 loaded\nBuilt: 2026-09-14T19:01:23.713Z\nSource: 1842361c0e760daaf614fc81dc0ae16019b023a2\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -855,6 +855,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
     const LAUNCHER_ID = 'st-invoice-toolkit-launcher';
+    const STARTUP_READINESS_TIMEOUT_MS = 15000;
+    const STARTUP_READINESS_POLL_INTERVAL_MS = 100;
 
     const SELECTORS = {
         materialsRows: 'section.materials-table tbody tr',
@@ -997,6 +999,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
     const readinessFetchByInvoiceId = new Map();
     const recallWarrantyReviewByInvoiceId = new Map();
     const partialServiceQuantityReviewByInvoiceId = new Map();
+    const refreshStateByInvoiceId = new Map();
+    const refreshInFlightInvoiceIds = new Set();
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1050,6 +1054,60 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
 
         const bodyMatch = String(document.body?.innerText || '').match(/\bInvoice\s*#\s*(\d+)\b/i);
         return bodyMatch ? bodyMatch[1] : null;
+    }
+
+    function hasRenderedInvoiceHeading() {
+        const invoiceId = getInvoiceId();
+        const headingRendered = [...document.querySelectorAll('h1,h2,[role="heading"]')]
+            .some(element =>
+                isVisibleElement(element) &&
+                !element.closest(`#${TOOL_ID}, #${LAUNCHER_ID}`) &&
+                /^Invoice\s*#\s*\d+\b/i.test(getControlText(element))
+            );
+
+        return Boolean(invoiceId && headingRendered && getInvoiceContextState(invoiceId).stable);
+    }
+
+    function waitForStartupReadiness(timeout = STARTUP_READINESS_TIMEOUT_MS) {
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            let observer = null;
+            let pollTimer = null;
+            let timeoutTimer = null;
+
+            const cleanup = () => {
+                settled = true;
+                observer?.disconnect();
+                if (pollTimer) clearInterval(pollTimer);
+                if (timeoutTimer) clearTimeout(timeoutTimer);
+            };
+
+            const evaluate = () => {
+                if (settled || !document.body) return;
+
+                if (!isInvoicePage() || (getInvoiceId() && hasRenderedInvoiceHeading())) {
+                    cleanup();
+                    resolve();
+                }
+            };
+
+            if (typeof MutationObserver === 'function' && document.documentElement) {
+                observer = new MutationObserver(evaluate);
+                observer.observe(document.documentElement, {
+                    childList: true,
+                    subtree: true
+                });
+            }
+
+            pollTimer = setInterval(evaluate, STARTUP_READINESS_POLL_INTERVAL_MS);
+            timeoutTimer = setTimeout(() => {
+                if (settled) return;
+                cleanup();
+                reject(new Error(`Invoice page did not render within ${timeout} ms.`));
+            }, timeout);
+
+            evaluate();
+        });
     }
 
     function getInvoiceDisplayLabel(invoiceId = getInvoiceId()) {
@@ -1238,6 +1296,23 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
         if (acknowledged) item.partialServiceQuantityAcknowledged = true;
         else delete item.partialServiceQuantityAcknowledged;
         Store.saveQueue(queue);
+    }
+
+    function clearRefreshedInvoiceAcknowledgements(invoiceId) {
+        const queue = Store.getQueue();
+        const queueEntry = queue.find(item => item.invoiceNumber === invoiceId);
+        if (queueEntry) {
+            const hadAcknowledgement = queueEntry.recallWarrantyAcknowledged === true ||
+                queueEntry.partialServiceQuantityAcknowledged === true;
+            delete queueEntry.recallWarrantyAcknowledged;
+            delete queueEntry.partialServiceQuantityAcknowledged;
+            if (hadAcknowledgement) Store.saveQueue(queue);
+        }
+
+        if (recallWarrantyAcknowledgementInvoiceId === invoiceId) {
+            recallWarrantyAcknowledgementInvoiceId = null;
+        }
+        partialServiceQuantityAcknowledgedInvoiceIds.delete(invoiceId);
     }
 
     function validatePartialServiceQuantityReview(invoiceId = getInvoiceId()) {
@@ -1824,6 +1899,24 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
             }
 
             #${TOOL_ID} #st-close-btn { background: var(--st-theme-danger, #7f1d1d); }
+
+            #${TOOL_ID} #st-refresh-btn {
+                width: 25px;
+                height: 23px;
+                padding: 0;
+                border: 0;
+                border-radius: 5px;
+                background: var(--st-theme-secondary, #475569);
+                color: var(--sttk-button-text, white);
+                cursor: pointer;
+                font-size: 16px;
+                line-height: 1;
+            }
+
+            #${TOOL_ID} #st-refresh-btn:disabled {
+                cursor: wait;
+                opacity: 0.65;
+            }
 
             #${TOOL_ID} .st-msg {
                 margin-top: 8px;
@@ -2756,6 +2849,76 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
             });
 
         readinessFetchByInvoiceId.set(invoiceId, fetchPromise);
+    }
+
+    function captureInvoiceAnalysisSnapshot(invoiceId) {
+        return [readinessStateByInvoiceId, recallWarrantyReviewByInvoiceId, partialServiceQuantityReviewByInvoiceId]
+            .map(cache => ({ cache, hasValue: cache.has(invoiceId), value: cache.get(invoiceId) }));
+    }
+
+    function restoreInvoiceAnalysisSnapshot(invoiceId, snapshot) {
+        snapshot.forEach(({ cache, hasValue, value }) => {
+            if (hasValue) cache.set(invoiceId, value);
+            else cache.delete(invoiceId);
+        });
+    }
+
+    async function refreshCurrentInvoiceToolkit() {
+        const invoiceId = getInvoiceId();
+        if (!invoiceId || refreshInFlightInvoiceIds.has(invoiceId)) return;
+
+        refreshInFlightInvoiceIds.add(invoiceId);
+        const refreshingState = { status: 'refreshing', message: 'Refreshing...' };
+        refreshStateByInvoiceId.set(invoiceId, refreshingState);
+
+        let cacheSnapshot = captureInvoiceAnalysisSnapshot(invoiceId);
+        try {
+            const businessUnitSource = getBusinessUnitReadinessSourceFromDom();
+            if (getInvoiceId() === invoiceId) createBox();
+            const existingFetch = readinessFetchByInvoiceId.get(invoiceId);
+            if (existingFetch) await existingFetch;
+            cacheSnapshot = captureInvoiceAnalysisSnapshot(invoiceId);
+
+            const invoiceData = await fetchInvoiceData(invoiceId);
+            const responseInvoiceId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
+                ? String(invoiceData.Id)
+                : null;
+            if (responseInvoiceId !== invoiceId) {
+                throw new Error('Invoice response ID did not match the invoice being refreshed.');
+            }
+
+            storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
+            storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
+            const checks = OperationalReadiness.evaluate(invoiceData, businessUnitSource);
+            readinessStateByInvoiceId.set(invoiceId, {
+                invoiceId,
+                checks,
+                at: new Date().toISOString()
+            });
+            clearRefreshedInvoiceAcknowledgements(invoiceId);
+
+            const successState = { status: 'success', message: 'Updated.' };
+            refreshStateByInvoiceId.set(invoiceId, successState);
+            setTimeout(() => {
+                if (refreshStateByInvoiceId.get(invoiceId) !== successState) return;
+                refreshStateByInvoiceId.delete(invoiceId);
+                if (getInvoiceId() === invoiceId) {
+                    document.getElementById(TOOL_ID)?.querySelector('#st-refresh-status')?.remove();
+                }
+            }, 2200);
+        } catch (error) {
+            restoreInvoiceAnalysisSnapshot(invoiceId, cacheSnapshot);
+            refreshStateByInvoiceId.set(invoiceId, {
+                status: 'error',
+                message: `Refresh failed: ${error?.message || 'Could not fetch invoice data.'}`
+            });
+        } finally {
+            try {
+                if (getInvoiceId() === invoiceId) createBox();
+            } finally {
+                refreshInFlightInvoiceIds.delete(invoiceId);
+            }
+        }
     }
 
     async function ensureInvoiceRecallWarrantyReview(invoiceId) {
@@ -4087,6 +4250,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
         box.querySelector('#st-toolkit-header')?.addEventListener('mousedown', startDrag);
 
         const actions = {
+            'st-refresh-btn': () => { void refreshCurrentInvoiceToolkit(); },
             'st-close-btn': () => {
                 const runner = Store.getRunner();
 
@@ -4149,11 +4313,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
         });
     }
 
-    function buildHeader(batchRunnerActive = false) {
+    function buildHeader(batchRunnerActive = false, refreshState = null) {
+        const refreshing = refreshState?.status === 'refreshing';
         return `
             <div id="st-toolkit-header">
                 <span>ServiceTitan Invoice Toolkit v${VERSION}</span>
                 <div class="st-head-actions">
+                    <button id="st-refresh-btn" type="button" title="Refresh Toolkit" aria-label="Refresh Toolkit" ${refreshing ? 'disabled' : ''}>↻</button>
                     <button id="st-close-btn" ${batchRunnerActive ? 'disabled' : ''}>×</button>
                 </div>
             </div>
@@ -4192,9 +4358,9 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
         injectStyle();
 
         document.getElementById(TOOL_ID)?.remove();
-        cleanupStaleRunner();
-
         const invoiceId = getInvoiceId();
+        if (!refreshInFlightInvoiceIds.has(invoiceId)) cleanupStaleRunner();
+
         let queue = Store.getQueue();
         const activeBatch = Store.getActiveBatch();
         const runner = Store.getRunner();
@@ -4234,7 +4400,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
             : { found: false, isBatched: false };
         const batched = stBatch.found ? stBatch.isBatched : false;
 
-        if (invoiceId && batched && inQueue && !batchRunnerActive) {
+        if (invoiceId && batched && inQueue && !batchRunnerActive && !refreshInFlightInvoiceIds.has(invoiceId)) {
             removeInvoiceFromReviewQueue(invoiceId, 'render-verified-batched');
             clearReviewedTabMarker();
             queue = Store.getQueue();
@@ -4294,12 +4460,14 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
         const partialServiceQuantityAcknowledged = hasAcknowledgedPartialServiceQuantity(invoiceId);
         const partialServiceQuantityReviewRequired = partialServiceQuantityTriggered && !partialServiceQuantityAcknowledged;
         const partialServiceQuantityItems = partialServiceQuantityReview?.items || [];
+        const refreshState = refreshStateByInvoiceId.get(invoiceId) || null;
 
         box.innerHTML = `
-            ${buildHeader(batchRunnerActive)}
+            ${buildHeader(batchRunnerActive, refreshState)}
             <div id="st-toolkit-body">
                 <div><strong>Invoice:</strong> ${escapeHtml(getInvoiceDisplayLabel(invoiceId))}</div>
                 <div><strong>Status:</strong> ${reviewStatus}</div>
+                ${refreshState?.message ? `<div id="st-refresh-status" class="st-msg" role="status" aria-live="polite">${escapeHtml(refreshState.message)}</div>` : ''}
 
                 ${toolkitMessage?.message ? `<div class="st-msg">${escapeHtml(toolkitMessage.message)}</div>` : ''}
 
@@ -4437,6 +4605,33 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
 
     let lastRouteKey = window.location.href;
     let manualLauncherOpen = false;
+    let startupState = 'pending';
+    let startupPromise = null;
+
+    function startInitialToolkit(timeout = STARTUP_READINESS_TIMEOUT_MS) {
+        if (startupPromise) return startupPromise;
+
+        startupPromise = waitForStartupReadiness(timeout)
+            .then(() => {
+                if (startupState !== 'pending') return;
+
+                startupState = 'ready';
+                createBox();
+                continueBatchRunnerIfNeeded();
+            })
+            .catch(error => {
+                startupState = 'timed-out';
+                const message = 'Invoice Toolkit startup timed out waiting for the invoice page to render.';
+                console.warn(`[Invoice Toolkit] ${message}`, error);
+                try {
+                    setToolkitMessage(message);
+                } catch (statusError) {
+                    console.warn('[Invoice Toolkit] Could not save the startup timeout status.', statusError);
+                }
+            });
+
+        return startupPromise;
+    }
 
     function refreshMaterialsIfChanged() {
         if (!isInvoicePage() || dragState) return;
@@ -4471,6 +4666,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
             setToolkitMessage('Invoice Toolkit restored on invoice page.');
         }
 
+        if (startupState === 'pending') return;
+
         createBox();
         continueBatchRunnerIfNeeded();
     }
@@ -4482,6 +4679,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
             runner: getRunnerDebugState()
         });
 
+        if (startupState === 'pending') return;
+
         if (!document.hidden) {
             createBox();
             continueBatchRunnerIfNeeded();
@@ -4490,6 +4689,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
 
     function handleWindowFocus() {
         refreshOwnedRunnerHeartbeat('window-focus', 0);
+        if (startupState === 'pending') return;
         createBox();
         continueBatchRunnerIfNeeded();
     }
@@ -4520,11 +4720,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
     }
 
     bindStaticEvents();
-
-    setTimeout(() => {
-        createBox();
-        continueBatchRunnerIfNeeded();
-    }, 3000);
+    startInitialToolkit();
 
     setInterval(applyReviewedTabMarker, 1000);
     setInterval(handleRouteChange, 1000);
