@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — RELEASE
 // @namespace    ST-Toolkits
-// @version      1.0.83
+// @version      1.0.84
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "RELEASE";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.83";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "1842361c0e760daaf614fc81dc0ae16019b023a2";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.84";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "8eef86948ffa0f8cf24575b62649d6f1d2d748d6";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "8eef869";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite RELEASE v1.0.83 loaded\nBuilt: 2026-09-14T19:01:53.288Z\nSource: 1842361c0e760daaf614fc81dc0ae16019b023a2\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite RELEASE v1.0.84 loaded\nBuilt: 2026-09-14T19:51:30.160Z\nSource: 8eef86948ffa0f8cf24575b62649d6f1d2d748d6\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -999,8 +999,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
     const readinessFetchByInvoiceId = new Map();
     const recallWarrantyReviewByInvoiceId = new Map();
     const partialServiceQuantityReviewByInvoiceId = new Map();
+    const goodLeapFinanceFeeReviewByInvoiceId = new Map();
     const refreshStateByInvoiceId = new Map();
     const refreshInFlightInvoiceIds = new Set();
+    const GOODLEAP_FINANCE_FEE_NAME = 'Finance fee for GM tracking';
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1276,6 +1278,146 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
 
     function getInvoicePartialServiceQuantityReview(invoiceId = getInvoiceId()) {
         return invoiceId ? partialServiceQuantityReviewByInvoiceId.get(invoiceId) || null : null;
+    }
+
+    function normalizeGoodLeapMaterialIdentifier(value) {
+        return typeof value === 'string'
+            ? value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+            : '';
+    }
+
+    function detectMissingGoodLeapFinanceFee(invoiceData) {
+        const payments = Array.isArray(invoiceData?.Payments) ? invoiceData.Payments : null;
+        if (!payments) {
+            return {
+                status: 'error',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: [],
+                message: 'Payment data is missing or unavailable.'
+            };
+        }
+
+        const matchingPayments = payments.filter(payment =>
+            typeof payment?.TypeName === 'string' && payment.TypeName.trim().toLowerCase() === 'goodleap'
+        );
+        if (!matchingPayments.length) {
+            return {
+                status: 'ready',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: []
+            };
+        }
+
+        const materials = Array.isArray(invoiceData?.Materials) ? getInvoiceMaterials(invoiceData) : null;
+        if (!materials) {
+            return {
+                status: 'error',
+                triggered: true,
+                hasGoodLeapPayment: true,
+                hasFinanceFeeMaterial: false,
+                matchingPayments,
+                matchingMaterials: [],
+                message: 'Material data is missing or unavailable.'
+            };
+        }
+
+        const expectedName = normalizeGoodLeapMaterialIdentifier(GOODLEAP_FINANCE_FEE_NAME);
+        const matchingMaterials = materials.filter(material => {
+            const identifierMatches = [material?.Code, material?.Name]
+                .some(value => normalizeGoodLeapMaterialIdentifier(value) === expectedName);
+            const quantityValue = material?.Quantity;
+            const quantity = typeof quantityValue === 'number'
+                ? quantityValue
+                : typeof quantityValue === 'string' && quantityValue.trim()
+                    ? Number(quantityValue)
+                    : NaN;
+            return identifierMatches && Number.isFinite(quantity) && quantity > 0;
+        });
+
+        return {
+            status: 'ready',
+            triggered: true,
+            hasGoodLeapPayment: true,
+            hasFinanceFeeMaterial: matchingMaterials.length > 0,
+            matchingPayments,
+            matchingMaterials
+        };
+    }
+
+    function storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData) {
+        const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
+            ? String(invoiceData.Id)
+            : null;
+        if (invoiceDataId !== invoiceId) {
+            goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, {
+                status: 'error',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: [],
+                message: 'Invoice ID mismatch'
+            });
+            return;
+        }
+
+        goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, detectMissingGoodLeapFinanceFee(invoiceData));
+    }
+
+    function getInvoiceGoodLeapFinanceFeeReview(invoiceId = getInvoiceId()) {
+        return invoiceId ? goodLeapFinanceFeeReviewByInvoiceId.get(invoiceId) || null : null;
+    }
+
+    function validateGoodLeapFinanceFeeReview(invoiceId = getInvoiceId()) {
+        const review = getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        if (!review || review.status !== 'ready') {
+            return {
+                allowed: false,
+                review,
+                message: `Cannot complete review until GoodLeap finance-fee validation passes${review?.message ? `: ${review.message}` : '.'}`
+            };
+        }
+        if (review.triggered && !review.hasFinanceFeeMaterial) {
+            return {
+                allowed: false,
+                review,
+                message: 'This invoice has a GoodLeap payment but is missing the required material: Finance fee for GM tracking. Add the material in ServiceTitan, then refresh the toolkit.'
+            };
+        }
+        return { allowed: true, review };
+    }
+
+    async function ensureInvoiceGoodLeapFinanceFeeReview(invoiceId) {
+        const current = getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        if (current?.status === 'ready' || current?.status === 'error') return current;
+
+        const readinessFetch = readinessFetchByInvoiceId.get(invoiceId);
+        if (readinessFetch) {
+            await readinessFetch;
+            return getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        }
+
+        try {
+            const invoiceData = await fetchInvoiceData(invoiceId);
+            storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData);
+        } catch (err) {
+            goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, {
+                status: 'error',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: [],
+                message: err?.message || 'Invoice payment/material data could not be checked'
+            });
+        }
+        return getInvoiceGoodLeapFinanceFeeReview(invoiceId);
     }
 
     function hasAcknowledgedPartialServiceQuantity(invoiceId = getInvoiceId()) {
@@ -2590,6 +2732,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                     displayText: 'PO: Checking...',
                     isBlocker: false
                 },
+                {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'loading',
+                    displayText: 'GoodLeap: Checking payment and required material...',
+                    isBlocker: true
+                },
                 buildBusinessUnitCheck(businessUnitSource)
             ];
         },
@@ -2598,8 +2747,46 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
             return [
                 this.evaluatePayment(invoiceData),
                 this.evaluatePurchaseOrders(invoiceData),
+                this.evaluateGoodLeapFinanceFee(invoiceData),
                 buildBusinessUnitCheck(businessUnitSource)
             ];
+        },
+
+        evaluateGoodLeapFinanceFee(invoiceData) {
+            const review = detectMissingGoodLeapFinanceFee(invoiceData);
+            if (review.status === 'error') {
+                return {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'error',
+                    displayText: `GoodLeap: Could not verify required finance fee${review.message ? ` (${review.message})` : ''}`,
+                    isBlocker: true
+                };
+            }
+            if (!review.triggered) {
+                return {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'pass',
+                    displayText: 'GoodLeap: No GoodLeap payment',
+                    isBlocker: true
+                };
+            }
+            return review.hasFinanceFeeMaterial
+                ? {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'pass',
+                    displayText: 'GoodLeap: Finance fee material present',
+                    isBlocker: true
+                }
+                : {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'blocked',
+                    displayText: 'GoodLeap: Finance fee for GM tracking is missing',
+                    isBlocker: true
+                };
         },
 
         evaluatePayment(invoiceData) {
@@ -2775,6 +2962,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
             .then(invoiceData => {
                 storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
                 storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
+                storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData);
                 const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
                     ? String(invoiceData.Id)
                     : null;
@@ -2794,6 +2982,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                             status: 'error',
                             displayText: 'PO: Invoice ID mismatch',
                             isBlocker: false
+                        },
+                        {
+                            id: 'goodleap-finance-fee',
+                            label: 'GoodLeap Finance Fee',
+                            status: 'error',
+                            displayText: 'GoodLeap: Invoice ID mismatch',
+                            isBlocker: true
                         },
                         buildBusinessUnitCheck(businessUnitSource)
                     ];
@@ -2818,6 +3013,15 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                     triggered: false,
                     items: []
                 });
+                goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, {
+                    status: 'error',
+                    triggered: false,
+                    hasGoodLeapPayment: false,
+                    hasFinanceFeeMaterial: false,
+                    matchingPayments: [],
+                    matchingMaterials: [],
+                    message: err?.message || 'Invoice payment/material data could not be checked'
+                });
                 const readiness = {
                     invoiceId,
                     checks: [
@@ -2834,6 +3038,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                             status: 'error',
                             displayText: `PO: ${err?.message || 'fetch failed'}`,
                             isBlocker: false
+                        },
+                        {
+                            id: 'goodleap-finance-fee',
+                            label: 'GoodLeap Finance Fee',
+                            status: 'error',
+                            displayText: `GoodLeap: ${err?.message || 'fetch failed'}`,
+                            isBlocker: true
                         },
                         buildBusinessUnitCheck(businessUnitSource)
                     ],
@@ -2852,7 +3063,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
     }
 
     function captureInvoiceAnalysisSnapshot(invoiceId) {
-        return [readinessStateByInvoiceId, recallWarrantyReviewByInvoiceId, partialServiceQuantityReviewByInvoiceId]
+        return [readinessStateByInvoiceId, recallWarrantyReviewByInvoiceId, partialServiceQuantityReviewByInvoiceId, goodLeapFinanceFeeReviewByInvoiceId]
             .map(cache => ({ cache, hasValue: cache.has(invoiceId), value: cache.get(invoiceId) }));
     }
 
@@ -2889,6 +3100,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
 
             storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
             storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
+            storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData);
             const checks = OperationalReadiness.evaluate(invoiceData, businessUnitSource);
             readinessStateByInvoiceId.set(invoiceId, {
                 invoiceId,
@@ -3373,6 +3585,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
             return false;
         }
 
+        const goodLeapFinanceFeeGate = validateGoodLeapFinanceFeeReview(invoiceId);
+        if (!goodLeapFinanceFeeGate.allowed) {
+            setToolkitMessage(goodLeapFinanceFeeGate.message);
+            createBox();
+            return false;
+        }
+
         const recallWarrantyGate = validateInvoiceRecallWarrantyReview(invoiceId);
         if (!recallWarrantyGate.allowed) {
             setToolkitMessage(recallWarrantyGate.message);
@@ -3584,6 +3803,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
         await ensureInvoicePartialServiceQuantityReview(invoiceId);
         const partialServiceQuantityGate = validatePartialServiceQuantityReview(invoiceId);
         if (!partialServiceQuantityGate.allowed) throw new Error(partialServiceQuantityGate.message);
+
+        await ensureInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        const goodLeapFinanceFeeGate = validateGoodLeapFinanceFeeReview(invoiceId);
+        if (!goodLeapFinanceFeeGate.allowed) throw new Error(goodLeapFinanceFeeGate.message);
 
         if (!skipReadinessCheck) {
             const readinessState = getOperationalReadinessState(invoiceId);
@@ -4341,6 +4564,19 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
         `).join('');
     }
 
+    function renderGoodLeapFinanceFeeWarning(invoiceId) {
+        const review = getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        if (!review?.triggered || review.hasFinanceFeeMaterial || review.status !== 'ready') return '';
+        return `
+            <div class="st-msg st-recall-warranty-warning">
+                <strong>⚠ Missing GoodLeap Finance Fee</strong><br>
+                This invoice has a GoodLeap payment but is missing the required material:<br>
+                <strong>${escapeHtml(GOODLEAP_FINANCE_FEE_NAME)}</strong><br>
+                <span class="st-small">Add the material in ServiceTitan, then refresh the toolkit.</span>
+            </div>
+        `;
+    }
+
     function createBox() {
         if (dragState) return;
 
@@ -4474,6 +4710,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                 ${sectionHeader('Operational Readiness', 'readiness', sections.readiness)}
                 ${sections.readiness ? `
                     <div class="st-card">
+                        ${renderGoodLeapFinanceFeeWarning(invoiceId)}
                         ${renderOperationalReadiness(readinessChecks)}
                     </div>
                 ` : ''}
