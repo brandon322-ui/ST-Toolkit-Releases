@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.81.202609121325
+// @version      1.0.82.202609141253
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.81";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "6a145094cc20ac235d284ae65cbb0874d8025e35";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.82";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "318da577292a9ad0ae70ce004393876be720955e";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "318da57";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.81 loaded\nBuilt: 2026-09-12T18:25:59.415Z\nSource: 6a145094cc20ac235d284ae65cbb0874d8025e35\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.41\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.82 loaded\nBuilt: 2026-09-14T17:53:33.586Z\nSource: 318da577292a9ad0ae70ce004393876be720955e\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -850,7 +850,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.41';
+    const VERSION = '3.3.42';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -992,9 +992,11 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
     let lastRenderedBadMaterialsCount = null;
     let equipmentReviewAcknowledgementInvoiceId = null;
     let recallWarrantyAcknowledgementInvoiceId = null;
+    const partialServiceQuantityAcknowledgedInvoiceIds = new Set();
     const readinessStateByInvoiceId = new Map();
     const readinessFetchByInvoiceId = new Map();
     const recallWarrantyReviewByInvoiceId = new Map();
+    const partialServiceQuantityReviewByInvoiceId = new Map();
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1176,6 +1178,86 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
         };
     }
 
+    function detectPartialServiceQuantities(invoiceData) {
+        const tasks = Array.isArray(invoiceData?.ItemGroups)
+            ? invoiceData.ItemGroups.flatMap(group => Array.isArray(group?.Tasks) ? group.Tasks : [])
+            : [];
+        const items = tasks
+            .filter(task => typeof task?.Quantity === 'number' &&
+                Number.isFinite(task.Quantity) &&
+                !Number.isInteger(task.Quantity))
+            .map(task => ({
+                name: task?.Name ?? null,
+                displayName: task?.DisplayName || task?.Description || task?.Name || 'Unnamed service',
+                quantity: task.Quantity,
+                skuCode: task?.Sku ?? task?.Code ?? task?.Name ?? null
+            }));
+
+        return { triggered: items.length > 0, items };
+    }
+
+    function storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData) {
+        const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
+            ? String(invoiceData.Id)
+            : null;
+        if (invoiceDataId !== invoiceId) {
+            partialServiceQuantityReviewByInvoiceId.set(invoiceId, {
+                status: 'error',
+                message: 'Invoice ID mismatch',
+                triggered: false,
+                items: []
+            });
+            return;
+        }
+
+        partialServiceQuantityReviewByInvoiceId.set(invoiceId, {
+            status: 'ready',
+            ...detectPartialServiceQuantities(invoiceData)
+        });
+    }
+
+    function getInvoicePartialServiceQuantityReview(invoiceId = getInvoiceId()) {
+        return invoiceId ? partialServiceQuantityReviewByInvoiceId.get(invoiceId) || null : null;
+    }
+
+    function hasAcknowledgedPartialServiceQuantity(invoiceId = getInvoiceId()) {
+        if (!invoiceId) return false;
+        return partialServiceQuantityAcknowledgedInvoiceIds.has(invoiceId) || Store.getQueue().some(item =>
+            item.invoiceNumber === invoiceId && item.partialServiceQuantityAcknowledged === true
+        );
+    }
+
+    function setPartialServiceQuantityAcknowledgement(invoiceId = getInvoiceId(), acknowledged = false) {
+        if (!invoiceId) return;
+        if (acknowledged) partialServiceQuantityAcknowledgedInvoiceIds.add(invoiceId);
+        else partialServiceQuantityAcknowledgedInvoiceIds.delete(invoiceId);
+
+        const queue = Store.getQueue();
+        const item = queue.find(entry => entry.invoiceNumber === invoiceId);
+        if (!item) return;
+        if (acknowledged) item.partialServiceQuantityAcknowledged = true;
+        else delete item.partialServiceQuantityAcknowledged;
+        Store.saveQueue(queue);
+    }
+
+    function validatePartialServiceQuantityReview(invoiceId = getInvoiceId()) {
+        const review = getInvoicePartialServiceQuantityReview(invoiceId);
+        if (!review || review.status !== 'ready') {
+            return {
+                allowed: false,
+                message: 'Cannot complete review until service quantities have been checked.'
+            };
+        }
+        if (!review.triggered || hasAcknowledgedPartialServiceQuantity(invoiceId)) {
+            return { allowed: true, review };
+        }
+        return {
+            allowed: false,
+            review,
+            message: 'Acknowledge the Partial Service Quantity review before marking this invoice reviewed or batching it.'
+        };
+    }
+
     function getInvoiceEquipmentLineItemRows() {
         return [...document.querySelectorAll(SELECTORS.equipmentRows)]
             .filter(row => row.querySelector(SELECTORS.equipmentNameCell));
@@ -1336,7 +1418,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
                 invoiceNumber,
                 url: cleanInvoiceUrl(item.url),
                 reviewedAt: typeof item.reviewedAt === 'string' ? item.reviewedAt : null,
-                ...(item.recallWarrantyAcknowledged === true ? { recallWarrantyAcknowledged: true } : {})
+                ...(item.recallWarrantyAcknowledged === true ? { recallWarrantyAcknowledged: true } : {}),
+                ...(item.partialServiceQuantityAcknowledged === true ? { partialServiceQuantityAcknowledged: true } : {})
             }];
         });
     }
@@ -2598,6 +2681,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
         const fetchPromise = fetchInvoiceData(invoiceId)
             .then(invoiceData => {
                 storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
+                storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
                 const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
                     ? String(invoiceData.Id)
                     : null;
@@ -2634,6 +2718,12 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
                 recallWarrantyReviewByInvoiceId.set(invoiceId, {
                     status: 'error',
                     message: err?.message || 'Invoice summary could not be checked'
+                });
+                partialServiceQuantityReviewByInvoiceId.set(invoiceId, {
+                    status: 'error',
+                    message: err?.message || 'Service quantities could not be checked',
+                    triggered: false,
+                    items: []
                 });
                 const readiness = {
                     invoiceId,
@@ -2688,6 +2778,30 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
             });
         }
         return getInvoiceRecallWarrantyReview(invoiceId);
+    }
+
+    async function ensureInvoicePartialServiceQuantityReview(invoiceId) {
+        const current = getInvoicePartialServiceQuantityReview(invoiceId);
+        if (current?.status === 'ready' || current?.status === 'error') return current;
+
+        const readinessFetch = readinessFetchByInvoiceId.get(invoiceId);
+        if (readinessFetch) {
+            await readinessFetch;
+            return getInvoicePartialServiceQuantityReview(invoiceId);
+        }
+
+        try {
+            const invoiceData = await fetchInvoiceData(invoiceId);
+            storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
+        } catch (err) {
+            partialServiceQuantityReviewByInvoiceId.set(invoiceId, {
+                status: 'error',
+                message: err?.message || 'Service quantities could not be checked',
+                triggered: false,
+                items: []
+            });
+        }
+        return getInvoicePartialServiceQuantityReview(invoiceId);
     }
 
     function getInvoiceMaterials(invoiceData) {
@@ -3103,6 +3217,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
             return false;
         }
 
+        const partialServiceQuantityGate = validatePartialServiceQuantityReview(invoiceId);
+        if (!partialServiceQuantityGate.allowed) {
+            setToolkitMessage(partialServiceQuantityGate.message);
+            createBox();
+            return false;
+        }
+
         const equipmentLineItemCount = getInvoiceEquipmentLineItemCount();
         if (equipmentLineItemCount > 0 && !hasAcknowledgedInvoiceEquipment(invoiceId)) {
             setToolkitMessage(`Review the ${equipmentLineItemCount} equipment line item${equipmentLineItemCount === 1 ? '' : 's'} on this invoice before marking reviewed.`);
@@ -3119,6 +3240,9 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
                 reviewedAt: new Date().toISOString(),
                 ...(recallWarrantyGate.review?.triggered && hasAcknowledgedInvoiceRecallWarranty(invoiceId)
                     ? { recallWarrantyAcknowledged: true }
+                    : {}),
+                ...(partialServiceQuantityGate.review?.triggered && hasAcknowledgedPartialServiceQuantity(invoiceId)
+                    ? { partialServiceQuantityAcknowledged: true }
                     : {})
             });
             Store.saveQueue(queue);
@@ -3293,6 +3417,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
         await ensureInvoiceRecallWarrantyReview(invoiceId);
         const recallWarrantyGate = validateInvoiceRecallWarrantyReview(invoiceId);
         if (!recallWarrantyGate.allowed) throw new Error(recallWarrantyGate.message);
+
+        await ensureInvoicePartialServiceQuantityReview(invoiceId);
+        const partialServiceQuantityGate = validatePartialServiceQuantityReview(invoiceId);
+        if (!partialServiceQuantityGate.allowed) throw new Error(partialServiceQuantityGate.message);
 
         if (!skipReadinessCheck) {
             const readinessState = getOperationalReadinessState(invoiceId);
@@ -3995,6 +4123,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
             setInvoiceRecallWarrantyAcknowledgement(getInvoiceId(), event.target.checked === true);
             createBox();
         });
+        box.querySelector('#st-partial-service-quantity-review-ack')?.addEventListener('change', event => {
+            setPartialServiceQuantityAcknowledgement(getInvoiceId(), event.target.checked === true);
+            createBox();
+        });
 
         box.addEventListener('click', event => {
             const toggle = event.target.closest('[data-st-toggle]');
@@ -4157,6 +4289,11 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
         const recallWarrantyTriggered = recallWarrantyReview?.status === 'ready' && recallWarrantyReview.triggered;
         const recallWarrantyAcknowledged = hasAcknowledgedInvoiceRecallWarranty(invoiceId);
         const recallWarrantyMatchedTerms = recallWarrantyReview?.matchedTerms || [];
+        const partialServiceQuantityReview = getInvoicePartialServiceQuantityReview(invoiceId);
+        const partialServiceQuantityTriggered = partialServiceQuantityReview?.status === 'ready' && partialServiceQuantityReview.triggered;
+        const partialServiceQuantityAcknowledged = hasAcknowledgedPartialServiceQuantity(invoiceId);
+        const partialServiceQuantityReviewRequired = partialServiceQuantityTriggered && !partialServiceQuantityAcknowledged;
+        const partialServiceQuantityItems = partialServiceQuantityReview?.items || [];
 
         box.innerHTML = `
             ${buildHeader(batchRunnerActive)}
@@ -4234,6 +4371,22 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
                     </div>
                 ` : ''}
 
+                ${partialServiceQuantityTriggered ? `
+                    <div class="st-card st-msg st-recall-warranty-warning">
+                        <strong>⚠ Partial Service Quantity</strong><br>
+                        One or more services were sold with a non-whole quantity.<br>
+                        <ul class="st-small">
+                            ${partialServiceQuantityItems.map(item => `
+                                <li>${item.skuCode && item.skuCode !== item.displayName ? `${escapeHtml(item.skuCode)} — ` : ''}${escapeHtml(item.displayName)} — Qty ${escapeHtml(item.quantity)}</li>
+                            `).join('')}
+                        </ul>
+                        <label class="st-small">
+                            <input id="st-partial-service-quantity-review-ack" type="checkbox" ${partialServiceQuantityAcknowledged ? 'checked' : ''}>
+                            I sent this to Dan and the technician for clarification.
+                        </label>
+                    </div>
+                ` : ''}
+
                 ${sectionHeader(`Review Queue — ${queue.length} reviewed`, 'queue', sections.queue)}
                 ${sections.queue ? `
                     <div class="st-card">
@@ -4245,7 +4398,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
                             </label>
                         ` : ''}
                         ${buttonRow([
-                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || equipmentReviewRequired || !invoiceId), 'st-btn-success'),
+                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || equipmentReviewRequired || partialServiceQuantityReviewRequired || !invoiceId), 'st-btn-success'),
                             smallButton('st-remove-reviewed-btn', 'Remove', disableForRunner(!invoiceId), 'st-btn-secondary')
                         ])}
                         ${buttonRow([
@@ -4270,7 +4423,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6a14509";
                             smallButton('st-clear-active-batch-btn', 'Clear Batch', disableForRunner(false), 'st-btn-muted')
                         ])}
                         ${buttonRow([
-                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessActionDisabled || !activeBatch || !invoiceId), 'st-btn-success'),
+                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessActionDisabled || partialServiceQuantityReviewRequired || !activeBatch || !invoiceId), 'st-btn-success'),
                             smallButton('st-batch-reviewed-queue-btn', 'Batch Queue', disableForRunner(!activeBatch || !invoiceId), 'st-btn-purple')
                         ])}
                     </div>
