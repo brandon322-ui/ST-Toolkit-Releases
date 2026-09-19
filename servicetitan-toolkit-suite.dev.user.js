@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.83.202609141401
+// @version      1.0.85.202609191825
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.83";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "1842361c0e760daaf614fc81dc0ae16019b023a2";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.85";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "e90b51353dd483d2de0f118957b8f14aa893f0db";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "e90b513";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.83 loaded\nBuilt: 2026-09-14T19:01:23.713Z\nSource: 1842361c0e760daaf614fc81dc0ae16019b023a2\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.85 loaded\nBuilt: 2026-09-19T23:25:03.259Z\nSource: e90b51353dd483d2de0f118957b8f14aa893f0db\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -999,8 +999,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
     const readinessFetchByInvoiceId = new Map();
     const recallWarrantyReviewByInvoiceId = new Map();
     const partialServiceQuantityReviewByInvoiceId = new Map();
+    const goodLeapFinanceFeeReviewByInvoiceId = new Map();
     const refreshStateByInvoiceId = new Map();
     const refreshInFlightInvoiceIds = new Set();
+    const GOODLEAP_FINANCE_FEE_NAME = 'Finance fee for GM tracking';
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1276,6 +1278,146 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
 
     function getInvoicePartialServiceQuantityReview(invoiceId = getInvoiceId()) {
         return invoiceId ? partialServiceQuantityReviewByInvoiceId.get(invoiceId) || null : null;
+    }
+
+    function normalizeGoodLeapMaterialIdentifier(value) {
+        return typeof value === 'string'
+            ? value.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase()
+            : '';
+    }
+
+    function detectMissingGoodLeapFinanceFee(invoiceData) {
+        const payments = Array.isArray(invoiceData?.Payments) ? invoiceData.Payments : null;
+        if (!payments) {
+            return {
+                status: 'error',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: [],
+                message: 'Payment data is missing or unavailable.'
+            };
+        }
+
+        const matchingPayments = payments.filter(payment =>
+            typeof payment?.TypeName === 'string' && payment.TypeName.trim().toLowerCase() === 'goodleap'
+        );
+        if (!matchingPayments.length) {
+            return {
+                status: 'ready',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: []
+            };
+        }
+
+        const materials = Array.isArray(invoiceData?.Materials) ? getInvoiceMaterials(invoiceData) : null;
+        if (!materials) {
+            return {
+                status: 'error',
+                triggered: true,
+                hasGoodLeapPayment: true,
+                hasFinanceFeeMaterial: false,
+                matchingPayments,
+                matchingMaterials: [],
+                message: 'Material data is missing or unavailable.'
+            };
+        }
+
+        const expectedName = normalizeGoodLeapMaterialIdentifier(GOODLEAP_FINANCE_FEE_NAME);
+        const matchingMaterials = materials.filter(material => {
+            const identifierMatches = [material?.Code, material?.Name]
+                .some(value => normalizeGoodLeapMaterialIdentifier(value) === expectedName);
+            const quantityValue = material?.Quantity;
+            const quantity = typeof quantityValue === 'number'
+                ? quantityValue
+                : typeof quantityValue === 'string' && quantityValue.trim()
+                    ? Number(quantityValue)
+                    : NaN;
+            return identifierMatches && Number.isFinite(quantity) && quantity > 0;
+        });
+
+        return {
+            status: 'ready',
+            triggered: true,
+            hasGoodLeapPayment: true,
+            hasFinanceFeeMaterial: matchingMaterials.length > 0,
+            matchingPayments,
+            matchingMaterials
+        };
+    }
+
+    function storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData) {
+        const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
+            ? String(invoiceData.Id)
+            : null;
+        if (invoiceDataId !== invoiceId) {
+            goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, {
+                status: 'error',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: [],
+                message: 'Invoice ID mismatch'
+            });
+            return;
+        }
+
+        goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, detectMissingGoodLeapFinanceFee(invoiceData));
+    }
+
+    function getInvoiceGoodLeapFinanceFeeReview(invoiceId = getInvoiceId()) {
+        return invoiceId ? goodLeapFinanceFeeReviewByInvoiceId.get(invoiceId) || null : null;
+    }
+
+    function validateGoodLeapFinanceFeeReview(invoiceId = getInvoiceId()) {
+        const review = getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        if (!review || review.status !== 'ready') {
+            return {
+                allowed: false,
+                review,
+                message: `Cannot complete review until GoodLeap finance-fee validation passes${review?.message ? `: ${review.message}` : '.'}`
+            };
+        }
+        if (review.triggered && !review.hasFinanceFeeMaterial) {
+            return {
+                allowed: false,
+                review,
+                message: 'This invoice has a GoodLeap payment but is missing the required material: Finance fee for GM tracking. Add the material in ServiceTitan, then refresh the toolkit.'
+            };
+        }
+        return { allowed: true, review };
+    }
+
+    async function ensureInvoiceGoodLeapFinanceFeeReview(invoiceId) {
+        const current = getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        if (current?.status === 'ready' || current?.status === 'error') return current;
+
+        const readinessFetch = readinessFetchByInvoiceId.get(invoiceId);
+        if (readinessFetch) {
+            await readinessFetch;
+            return getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        }
+
+        try {
+            const invoiceData = await fetchInvoiceData(invoiceId);
+            storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData);
+        } catch (err) {
+            goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, {
+                status: 'error',
+                triggered: false,
+                hasGoodLeapPayment: false,
+                hasFinanceFeeMaterial: false,
+                matchingPayments: [],
+                matchingMaterials: [],
+                message: err?.message || 'Invoice payment/material data could not be checked'
+            });
+        }
+        return getInvoiceGoodLeapFinanceFeeReview(invoiceId);
     }
 
     function hasAcknowledgedPartialServiceQuantity(invoiceId = getInvoiceId()) {
@@ -2590,6 +2732,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                     displayText: 'PO: Checking...',
                     isBlocker: false
                 },
+                {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'loading',
+                    displayText: 'GoodLeap: Checking payment and required material...',
+                    isBlocker: true
+                },
                 buildBusinessUnitCheck(businessUnitSource)
             ];
         },
@@ -2598,8 +2747,46 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
             return [
                 this.evaluatePayment(invoiceData),
                 this.evaluatePurchaseOrders(invoiceData),
+                this.evaluateGoodLeapFinanceFee(invoiceData),
                 buildBusinessUnitCheck(businessUnitSource)
             ];
+        },
+
+        evaluateGoodLeapFinanceFee(invoiceData) {
+            const review = detectMissingGoodLeapFinanceFee(invoiceData);
+            if (review.status === 'error') {
+                return {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'error',
+                    displayText: `GoodLeap: Could not verify required finance fee${review.message ? ` (${review.message})` : ''}`,
+                    isBlocker: true
+                };
+            }
+            if (!review.triggered) {
+                return {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'pass',
+                    displayText: 'GoodLeap: No GoodLeap payment',
+                    isBlocker: true
+                };
+            }
+            return review.hasFinanceFeeMaterial
+                ? {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'pass',
+                    displayText: 'GoodLeap: Finance fee material present',
+                    isBlocker: true
+                }
+                : {
+                    id: 'goodleap-finance-fee',
+                    label: 'GoodLeap Finance Fee',
+                    status: 'blocked',
+                    displayText: 'GoodLeap: Finance fee for GM tracking is missing',
+                    isBlocker: true
+                };
         },
 
         evaluatePayment(invoiceData) {
@@ -2775,6 +2962,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
             .then(invoiceData => {
                 storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
                 storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
+                storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData);
                 const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
                     ? String(invoiceData.Id)
                     : null;
@@ -2794,6 +2982,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                             status: 'error',
                             displayText: 'PO: Invoice ID mismatch',
                             isBlocker: false
+                        },
+                        {
+                            id: 'goodleap-finance-fee',
+                            label: 'GoodLeap Finance Fee',
+                            status: 'error',
+                            displayText: 'GoodLeap: Invoice ID mismatch',
+                            isBlocker: true
                         },
                         buildBusinessUnitCheck(businessUnitSource)
                     ];
@@ -2818,6 +3013,15 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                     triggered: false,
                     items: []
                 });
+                goodLeapFinanceFeeReviewByInvoiceId.set(invoiceId, {
+                    status: 'error',
+                    triggered: false,
+                    hasGoodLeapPayment: false,
+                    hasFinanceFeeMaterial: false,
+                    matchingPayments: [],
+                    matchingMaterials: [],
+                    message: err?.message || 'Invoice payment/material data could not be checked'
+                });
                 const readiness = {
                     invoiceId,
                     checks: [
@@ -2834,6 +3038,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                             status: 'error',
                             displayText: `PO: ${err?.message || 'fetch failed'}`,
                             isBlocker: false
+                        },
+                        {
+                            id: 'goodleap-finance-fee',
+                            label: 'GoodLeap Finance Fee',
+                            status: 'error',
+                            displayText: `GoodLeap: ${err?.message || 'fetch failed'}`,
+                            isBlocker: true
                         },
                         buildBusinessUnitCheck(businessUnitSource)
                     ],
@@ -2852,7 +3063,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
     }
 
     function captureInvoiceAnalysisSnapshot(invoiceId) {
-        return [readinessStateByInvoiceId, recallWarrantyReviewByInvoiceId, partialServiceQuantityReviewByInvoiceId]
+        return [readinessStateByInvoiceId, recallWarrantyReviewByInvoiceId, partialServiceQuantityReviewByInvoiceId, goodLeapFinanceFeeReviewByInvoiceId]
             .map(cache => ({ cache, hasValue: cache.has(invoiceId), value: cache.get(invoiceId) }));
     }
 
@@ -2889,6 +3100,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
 
             storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
             storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
+            storeInvoiceGoodLeapFinanceFeeReview(invoiceId, invoiceData);
             const checks = OperationalReadiness.evaluate(invoiceData, businessUnitSource);
             readinessStateByInvoiceId.set(invoiceId, {
                 invoiceId,
@@ -3373,6 +3585,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
             return false;
         }
 
+        const goodLeapFinanceFeeGate = validateGoodLeapFinanceFeeReview(invoiceId);
+        if (!goodLeapFinanceFeeGate.allowed) {
+            setToolkitMessage(goodLeapFinanceFeeGate.message);
+            createBox();
+            return false;
+        }
+
         const recallWarrantyGate = validateInvoiceRecallWarrantyReview(invoiceId);
         if (!recallWarrantyGate.allowed) {
             setToolkitMessage(recallWarrantyGate.message);
@@ -3584,6 +3803,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
         await ensureInvoicePartialServiceQuantityReview(invoiceId);
         const partialServiceQuantityGate = validatePartialServiceQuantityReview(invoiceId);
         if (!partialServiceQuantityGate.allowed) throw new Error(partialServiceQuantityGate.message);
+
+        await ensureInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        const goodLeapFinanceFeeGate = validateGoodLeapFinanceFeeReview(invoiceId);
+        if (!goodLeapFinanceFeeGate.allowed) throw new Error(goodLeapFinanceFeeGate.message);
 
         if (!skipReadinessCheck) {
             const readinessState = getOperationalReadinessState(invoiceId);
@@ -4341,6 +4564,19 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
         `).join('');
     }
 
+    function renderGoodLeapFinanceFeeWarning(invoiceId) {
+        const review = getInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        if (!review?.triggered || review.hasFinanceFeeMaterial || review.status !== 'ready') return '';
+        return `
+            <div class="st-msg st-recall-warranty-warning">
+                <strong>⚠ Missing GoodLeap Finance Fee</strong><br>
+                This invoice has a GoodLeap payment but is missing the required material:<br>
+                <strong>${escapeHtml(GOODLEAP_FINANCE_FEE_NAME)}</strong><br>
+                <span class="st-small">Add the material in ServiceTitan, then refresh the toolkit.</span>
+            </div>
+        `;
+    }
+
     function createBox() {
         if (dragState) return;
 
@@ -4474,6 +4710,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
                 ${sectionHeader('Operational Readiness', 'readiness', sections.readiness)}
                 ${sections.readiness ? `
                     <div class="st-card">
+                        ${renderGoodLeapFinanceFeeWarning(invoiceId)}
                         ${renderOperationalReadiness(readinessChecks)}
                     </div>
                 ` : ''}
@@ -4747,12 +4984,16 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
   const POSITION_KEY = 'stEquipAgeToolkitPanelPosition';
   const LAUNCHER_ID = 'st-equipment-age-toolkit-launcher';
   const STATE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+  const EQUIPMENT_LIST_PATH = /^\/app\/api\/installedequipment\/paged\/(\d+)\/?$/i;
   const currentYear = new Date().getFullYear();
 
   let manualLauncherOpen = false;
   let lastRouteKey = location.href;
   let automaticComparisonPending = false;
   let automaticSuggestionRunPending = false;
+  let equipmentRequestGeneration = 0;
+  let activeEquipmentRequest = null;
+  let lastEquipmentReadinessDiagnostic = '';
 
   const ST = {
     equipmentRows: 'tr[role="row"][data-grid-row-index]',
@@ -4766,6 +5007,176 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
     businessUnit: '[data-bind="text: BusinessUnit"]',
     jobType: '[data-bind="text: JobType"]'
   };
+
+  function equipmentDiagnostic(event, details = {}) {
+    console.debug?.('[ST Equipment]', event, details);
+  }
+
+  function equipmentReadinessDiagnostic(event, details = {}) {
+    const key = `${event}|${JSON.stringify(details)}`;
+    if (key === lastEquipmentReadinessDiagnostic) return;
+    lastEquipmentReadinessDiagnostic = key;
+    equipmentDiagnostic(event, details);
+  }
+
+  function installEquipmentRequestTracker() {
+    const Xhr = window.XMLHttpRequest;
+    if (!Xhr?.prototype || Xhr.prototype.__stEquipmentRequestTrackerInstalled) return;
+
+    const requestMetadata = new WeakMap();
+    const originalOpen = Xhr.prototype.open;
+    const originalSend = Xhr.prototype.send;
+
+    Xhr.prototype.open = function (method, url, ...rest) {
+      try {
+        const parsed = new URL(String(url), location.origin);
+        const match = parsed.pathname.match(EQUIPMENT_LIST_PATH);
+        requestMetadata.set(this, match ? {
+          locationId: match[1],
+          method: String(method || '').toUpperCase(),
+          url: parsed
+        } : null);
+      } catch {
+        requestMetadata.set(this, null);
+      }
+
+      return originalOpen.call(this, method, url, ...rest);
+    };
+
+    Xhr.prototype.send = function (body) {
+      try {
+        const metadata = requestMetadata.get(this);
+        if (metadata?.method === 'POST') {
+          const request = beginEquipmentRequest(metadata.locationId, body);
+          if (request) {
+            this.addEventListener('loadend', () => {
+              try {
+                if (this.status >= 200 && this.status < 300) {
+                  finishEquipmentRequestSuccess(request, JSON.parse(this.responseText || ''));
+                } else {
+                  finishEquipmentRequestFailure(request, `HTTP ${this.status || 'network error'}`);
+                }
+              } catch (error) {
+                finishEquipmentRequestFailure(request, 'response parse failed');
+              }
+            }, { once: true });
+
+            this.addEventListener('abort', () => {
+              finishEquipmentRequestFailure(request, 'aborted');
+            }, { once: true });
+
+            this.addEventListener('error', () => {
+              finishEquipmentRequestFailure(request, 'network error');
+            }, { once: true });
+          }
+        }
+      } catch {
+        // Tracking must never interfere with ServiceTitan's request.
+      }
+
+      return originalSend.call(this, body);
+    };
+
+    Xhr.prototype.__stEquipmentRequestTrackerInstalled = true;
+  }
+
+  function parseEquipmentRequestPayload(body) {
+    try {
+      return typeof body === 'string' ? JSON.parse(body) : body || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function beginEquipmentRequest(locationId, body) {
+    const currentLocationId = getEquipmentTableLocationId();
+    if (!currentLocationId || String(currentLocationId) !== String(locationId)) return null;
+
+    const payload = parseEquipmentRequestPayload(body);
+    const request = {
+      generation: ++equipmentRequestGeneration,
+      locationId: String(locationId),
+      route: routeIdentity(location.href),
+      startedAt: Date.now(),
+      status: 'pending',
+      page: Number(payload?.page),
+      pageSize: Number(payload?.pageSize),
+      active: payload?.active === true
+    };
+
+    activeEquipmentRequest = request;
+    lastEquipmentReadinessDiagnostic = '';
+    equipmentDiagnostic('equipment-request-start', {
+      locationId: request.locationId,
+      generation: request.generation,
+      page: request.page,
+      pageSize: request.pageSize
+    });
+    return request;
+  }
+
+  function isCurrentEquipmentRequest(request) {
+    return Boolean(
+      request &&
+      activeEquipmentRequest?.generation === request.generation &&
+      String(getEquipmentTableLocationId()) === request.locationId &&
+      routeIdentity(location.href) === request.route
+    );
+  }
+
+  function finishEquipmentRequestSuccess(request, response) {
+    if (!isCurrentEquipmentRequest(request)) {
+      equipmentDiagnostic('equipment-response-stale', { locationId: request?.locationId, generation: request?.generation });
+      return;
+    }
+
+    const records = Array.isArray(response?.data) ? response.data : null;
+    const totalCount = Number(response?.totalCount);
+    const page = Number(response?.page);
+    const pageSize = Number(response?.pageSize);
+    const hasMore = response?.hasMore === true;
+
+    if (!records || !Number.isFinite(totalCount) || !Number.isFinite(page) || !Number.isFinite(pageSize)) {
+      finishEquipmentRequestFailure(request, 'invalid response');
+      return;
+    }
+
+    Object.assign(request, {
+      status: 'success',
+      completedAt: Date.now(),
+      page,
+      pageSize,
+      hasMore,
+      totalCount,
+      recordCount: records.length,
+      recordIds: records.map(record => record?.id).filter(id => id !== undefined && id !== null)
+    });
+    equipmentDiagnostic('equipment-request-success', {
+      locationId: request.locationId,
+      generation: request.generation,
+      page,
+      pageSize,
+      totalCount,
+      recordCount: records.length,
+      hasMore
+    });
+  }
+
+  function finishEquipmentRequestFailure(request, reason) {
+    if (!isCurrentEquipmentRequest(request)) {
+      equipmentDiagnostic('equipment-response-stale', { locationId: request?.locationId, generation: request?.generation });
+      return;
+    }
+
+    if (request.status === 'failure') return;
+
+    Object.assign(request, { status: 'failure', completedAt: Date.now(), reason });
+    equipmentDiagnostic('equipment-request-failure', {
+      locationId: request.locationId,
+      generation: request.generation,
+      reason
+    });
+  }
 
   const ACTION_SELECTORS = {
     addEquipment: [
@@ -4854,6 +5265,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
   // Part-lifespan / guidance wording that describes how often parts typically fail — not evidence of a replacement
   const PART_LIFESPAN_PHRASES = ['typically need to be replaced', 'need to be replaced', 'typically replaced', '2-3 times', '2-3 times over', 'typically need'];
 
+  installEquipmentRequestTracker();
   waitForStart();
   setInterval(handleRouteChange, 1000);
 
@@ -4895,6 +5307,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
     if (location.href === lastRouteKey) return;
 
     lastRouteKey = location.href;
+    invalidateEquipmentRequestForRoute();
     clearMismatchedStateForPage();
 
     const pageType = getPageType();
@@ -5104,7 +5517,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
 
     document.getElementById('st-ea3-scan').onclick = scanOnly;
     document.getElementById('st-ea3-go').onclick = scanAndOpenEquipment;
-    document.getElementById('st-ea3-compare').onclick = compareEquipment;
+    document.getElementById('st-ea3-compare').onclick = () => void compareEquipmentWhenReady();
     document.getElementById('st-ea3-return').onclick = returnToInvoice;
 
     document.getElementById('st-ea3-clear').onclick = () => {
@@ -5295,10 +5708,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
         return;
       }
 
-      if (state.comparisons?.length) {
-        renderComparisons(state.comparisons);
-        status(`Restored ${state.comparisons.length} comparison result(s).`);
-      } else if (Array.isArray(state.findings)) {
+      if (Array.isArray(state.findings)) {
         renderFindings(state.findings, `Loading equipment for ${state.findings.length} stored finding(s)...`);
         void compareEquipmentWhenReady();
       }
@@ -5374,14 +5784,31 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
     if (!Array.isArray(state?.findings) || !isStateForCurrentEquipmentPage(state)) return;
 
     automaticComparisonPending = true;
-    status('Waiting for the equipment table to finish loading...');
+    status('Waiting for ServiceTitan equipment...');
 
     try {
-      await waitUntil(isEquipmentTableReady, 8000, 200);
+      const readiness = await waitUntil(isEquipmentTableReady, 8000, 200);
+      if (!readiness) {
+        const reason = activeEquipmentRequest?.status === 'failure'
+          ? 'Equipment data unavailable. Refresh comparison after ServiceTitan finishes loading.'
+          : activeEquipmentRequest?.status === 'success' && !isCompleteEquipmentResponse(activeEquipmentRequest)
+            ? 'Equipment list is incomplete. Comparison was not run.'
+            : 'Equipment data unavailable. Refresh comparison after ServiceTitan finishes loading.';
+        status(reason);
+        equipmentDiagnostic('equipment-readiness-timeout', {
+          locationId: getEquipmentTableLocationId(),
+          requestStatus: activeEquipmentRequest?.status || 'none'
+        });
+        return;
+      }
 
       const currentState = getState();
       if (!Array.isArray(currentState?.findings) || !isStateForCurrentEquipmentPage(currentState)) return;
 
+      equipmentDiagnostic(readiness.empty ? 'equipment-empty-verified' : 'equipment-ready', {
+        locationId: readiness.locationId,
+        generation: readiness.generation
+      });
       compareEquipment();
     } finally {
       automaticComparisonPending = false;
@@ -5391,13 +5818,77 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "1842361";
   function isEquipmentTableReady() {
     if (getPageType() !== 'equipmentTable') return false;
 
-    const hasVisibleRows = [...document.querySelectorAll(ST.equipmentRows)]
-      .some(row => row.offsetParent !== null);
-    if (hasVisibleRows) return true;
+    const request = activeEquipmentRequest;
+    if (!isCurrentEquipmentRequest(request) || request.status !== 'success') return false;
 
-    return /\b(no equipment|no records|no results)\b/i.test(
-      normalizeSpaces(document.body?.innerText || '')
+    if (!isCompleteEquipmentResponse(request)) {
+      equipmentReadinessDiagnostic('equipment-pagination-incomplete', {
+        locationId: request.locationId,
+        generation: request.generation,
+        totalCount: request.totalCount,
+        recordCount: request.recordCount,
+        hasMore: request.hasMore
+      });
+      return false;
+    }
+
+    const empty = request.recordCount === 0 && request.totalCount === 0 && request.hasMore === false;
+    if (empty) return { locationId: request.locationId, generation: request.generation, empty: true };
+
+    const scope = getEquipmentTableScope();
+    const rows = [...(scope?.grid?.querySelectorAll(ST.equipmentRows) || [])]
+      .filter(row => row.offsetParent !== null);
+    const hasTypeHeader = scope?.headers?.some(header =>
+      normalizeSpaces(header.innerText).replace(/[^a-z ]/gi, '').trim() === 'Type'
     );
+    const rowsAreRendered = rows.length === request.recordCount && rows.every(row => {
+      const name = textOf(row.querySelector(ST.equipmentNameCell));
+      const typeCell = getCellByHeader(row, 'Type');
+      const installedCell = row.querySelector(ST.installedOnCell);
+      return Boolean(name && typeCell && installedCell);
+    });
+
+    if (!hasTypeHeader || !rowsAreRendered) {
+      equipmentReadinessDiagnostic('equipment-render-pending', {
+        locationId: request.locationId,
+        generation: request.generation,
+        expectedRows: request.recordCount,
+        renderedRows: rows.length,
+        hasTypeHeader: Boolean(hasTypeHeader)
+      });
+      return false;
+    }
+
+    return { locationId: request.locationId, generation: request.generation, empty: false };
+  }
+
+  function isCompleteEquipmentResponse(request) {
+    return Boolean(
+      request?.active === true &&
+      request.page === 1 &&
+      request.pageSize > 0 &&
+      request.hasMore === false &&
+      request.totalCount === request.recordCount
+    );
+  }
+
+  function getEquipmentTableScope() {
+    const toolbar = document.querySelector('[data-testid="location-equipment-toolbar"]');
+    const container = toolbar?.parentElement;
+    const grid = container?.querySelector('[role="grid"][aria-rowcount]');
+    const headers = [...(grid?.querySelectorAll('thead [role="columnheader"], thead th') || [])];
+    return grid ? { container, grid, headers } : null;
+  }
+
+  function invalidateEquipmentRequestForRoute() {
+    if (!activeEquipmentRequest) return;
+    if (isCurrentEquipmentRequest(activeEquipmentRequest)) return;
+
+    equipmentDiagnostic('equipment-response-stale', {
+      locationId: activeEquipmentRequest.locationId,
+      generation: activeEquipmentRequest.generation
+    });
+    activeEquipmentRequest = null;
   }
 
   function scanInvoice() {
