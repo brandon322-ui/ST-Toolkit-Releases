@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.85.202609191825
+// @version      1.0.86.202609191837
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.85";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "e90b51353dd483d2de0f118957b8f14aa893f0db";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "e90b513";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.86";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "ed485797c2628041e60311756079e53f53c74e27";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.85 loaded\nBuilt: 2026-09-19T23:25:03.259Z\nSource: e90b51353dd483d2de0f118957b8f14aa893f0db\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.86 loaded\nBuilt: 2026-09-19T23:37:54.737Z\nSource: ed485797c2628041e60311756079e53f53c74e27\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -6509,7 +6509,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "e90b513";
 
   function getCellByHeader(rowEl, headerText) {
     const table = rowEl.closest('table');
-    const headers = [...(table?.querySelectorAll('thead [role="columnheader"], thead th') || [])];
+    let headers = [...(table?.querySelectorAll('thead [role="columnheader"], thead th') || [])];
+    if (!headers.length) {
+      headers = getEquipmentTableScope()?.headers || [];
+    }
     const header = headers.find(item => normalizeSpaces(item.innerText).replace(/[^a-z ]/gi, '').trim() === headerText);
     const index = header ? headers.indexOf(header) : -1;
 
