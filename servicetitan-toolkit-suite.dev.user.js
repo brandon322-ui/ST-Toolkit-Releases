@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.87.202609231231
+// @version      1.0.88.202609231249
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.87";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "6525d111bbb4086efad62ba57ecafb9ddd164634";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.88";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "ed92f22afa28056786046408d03502ab2648df40";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed92f22";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.87 loaded\nBuilt: 2026-09-23T17:31:43.335Z\nSource: 6525d111bbb4086efad62ba57ecafb9ddd164634\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.88 loaded\nBuilt: 2026-09-23T17:49:00.115Z\nSource: ed92f22afa28056786046408d03502ab2648df40\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -1488,6 +1488,59 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
             review,
             message: 'Acknowledge the Partial Service Quantity review before marking this invoice reviewed or batching it.'
         };
+    }
+
+    function validateInvoiceReviewGates(invoiceId = getInvoiceId(), { checkReadiness = true } = {}) {
+        const goodLeapFinanceFee = validateGoodLeapFinanceFeeReview(invoiceId);
+        if (!goodLeapFinanceFee.allowed) return goodLeapFinanceFee;
+
+        if (checkReadiness) {
+            const readinessState = getOperationalReadinessState(invoiceId);
+            if (readinessState.status === 'loading') {
+                return { allowed: false, message: 'Cannot complete review while readiness checks are still loading.' };
+            }
+            if (readinessState.status === 'blocked') {
+                return {
+                    allowed: false,
+                    message: `Cannot complete review until all readiness checks pass: ${readinessState.blockers.map(check => check.displayText).join('; ')}.`
+                };
+            }
+            if (readinessState.status !== 'pass') {
+                return { allowed: false, message: 'Cannot complete review until readiness checks pass.' };
+            }
+        }
+
+        const recallWarranty = validateInvoiceRecallWarrantyReview(invoiceId);
+        if (!recallWarranty.allowed) return recallWarranty;
+
+        const partialServiceQuantity = validatePartialServiceQuantityReview(invoiceId);
+        if (!partialServiceQuantity.allowed) return partialServiceQuantity;
+
+        const equipmentLineItemCount = getInvoiceEquipmentLineItemCount();
+        if (equipmentLineItemCount > 0 && !hasAcknowledgedInvoiceEquipment(invoiceId)) {
+            return {
+                allowed: false,
+                message: `Review the ${equipmentLineItemCount} equipment line item${equipmentLineItemCount === 1 ? '' : 's'} before marking this invoice reviewed.`
+            };
+        }
+
+        return {
+            allowed: true,
+            reviews: { goodLeapFinanceFee, recallWarranty, partialServiceQuantity }
+        };
+    }
+
+    async function ensureInvoiceReviewGateReady(invoiceId, { checkReadiness = true } = {}) {
+        if (checkReadiness) {
+            refreshOperationalReadinessIfNeeded(invoiceId);
+            const readinessFetch = readinessFetchByInvoiceId.get(invoiceId);
+            if (readinessFetch) await readinessFetch;
+        }
+
+        await ensureInvoiceRecallWarrantyReview(invoiceId);
+        await ensureInvoicePartialServiceQuantityReview(invoiceId);
+        await ensureInvoiceGoodLeapFinanceFeeReview(invoiceId);
+        return validateInvoiceReviewGates(invoiceId, { checkReadiness });
     }
 
     function getInvoiceEquipmentLineItemRows() {
@@ -3547,6 +3600,20 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
 
     async function cleanAndMarkReviewed() {
         try {
+            const invoiceId = getInvoiceId();
+            if (!invoiceId) {
+                setToolkitMessage('Could not find invoice id.');
+                createBox();
+                return;
+            }
+
+            const preflight = await ensureInvoiceReviewGateReady(invoiceId);
+            if (!preflight.allowed) {
+                setToolkitMessage(preflight.message);
+                createBox();
+                return;
+            }
+
             const result = await cleanBadMaterials(true, { reloadAfter: false });
             if (result.inProgress) return;
 
@@ -3581,50 +3648,9 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
             return false;
         }
 
-        const readinessState = getOperationalReadinessState(invoiceId);
-
-        if (readinessState.status === 'loading') {
-            setToolkitMessage('Cannot mark reviewed while readiness checks are still loading.');
-            createBox();
-            return false;
-        }
-
-        if (readinessState.status === 'blocked') {
-            setToolkitMessage(`Cannot mark reviewed until all readiness checks pass: ${readinessState.blockers.map(check => check.displayText).join('; ')}.`);
-            createBox();
-            return false;
-        }
-
-        if (readinessState.status !== 'pass') {
-            setToolkitMessage('Cannot mark reviewed until readiness checks pass.');
-            createBox();
-            return false;
-        }
-
-        const goodLeapFinanceFeeGate = validateGoodLeapFinanceFeeReview(invoiceId);
-        if (!goodLeapFinanceFeeGate.allowed) {
-            setToolkitMessage(goodLeapFinanceFeeGate.message);
-            createBox();
-            return false;
-        }
-
-        const recallWarrantyGate = validateInvoiceRecallWarrantyReview(invoiceId);
-        if (!recallWarrantyGate.allowed) {
-            setToolkitMessage(recallWarrantyGate.message);
-            createBox();
-            return false;
-        }
-
-        const partialServiceQuantityGate = validatePartialServiceQuantityReview(invoiceId);
-        if (!partialServiceQuantityGate.allowed) {
-            setToolkitMessage(partialServiceQuantityGate.message);
-            createBox();
-            return false;
-        }
-
-        const equipmentLineItemCount = getInvoiceEquipmentLineItemCount();
-        if (equipmentLineItemCount > 0 && !hasAcknowledgedInvoiceEquipment(invoiceId)) {
-            setToolkitMessage(`Review the ${equipmentLineItemCount} equipment line item${equipmentLineItemCount === 1 ? '' : 's'} on this invoice before marking reviewed.`);
+        const reviewGate = validateInvoiceReviewGates(invoiceId);
+        if (!reviewGate.allowed) {
+            setToolkitMessage(reviewGate.message);
             createBox();
             return false;
         }
@@ -3636,10 +3662,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
                 invoiceNumber: invoiceId,
                 url: cleanInvoiceUrl(window.location.href),
                 reviewedAt: new Date().toISOString(),
-                ...(recallWarrantyGate.review?.triggered && hasAcknowledgedInvoiceRecallWarranty(invoiceId)
+                ...(reviewGate.reviews.recallWarranty.review?.triggered && hasAcknowledgedInvoiceRecallWarranty(invoiceId)
                     ? { recallWarrantyAcknowledged: true }
                     : {}),
-                ...(partialServiceQuantityGate.review?.triggered && hasAcknowledgedPartialServiceQuantity(invoiceId)
+                ...(reviewGate.reviews.partialServiceQuantity.review?.triggered && hasAcknowledgedPartialServiceQuantity(invoiceId)
                     ? { partialServiceQuantityAcknowledged: true }
                     : {})
             });
@@ -3812,33 +3838,10 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
             );
         }
 
-        await ensureInvoiceRecallWarrantyReview(invoiceId);
-        const recallWarrantyGate = validateInvoiceRecallWarrantyReview(invoiceId);
-        if (!recallWarrantyGate.allowed) throw new Error(recallWarrantyGate.message);
-
-        await ensureInvoicePartialServiceQuantityReview(invoiceId);
-        const partialServiceQuantityGate = validatePartialServiceQuantityReview(invoiceId);
-        if (!partialServiceQuantityGate.allowed) throw new Error(partialServiceQuantityGate.message);
-
-        await ensureInvoiceGoodLeapFinanceFeeReview(invoiceId);
-        const goodLeapFinanceFeeGate = validateGoodLeapFinanceFeeReview(invoiceId);
-        if (!goodLeapFinanceFeeGate.allowed) throw new Error(goodLeapFinanceFeeGate.message);
-
-        if (!skipReadinessCheck) {
-            const readinessState = getOperationalReadinessState(invoiceId);
-
-            if (readinessState.status === 'loading') {
-                throw new Error('Cannot batch while readiness checks are still loading.');
-            }
-
-            if (readinessState.status === 'blocked') {
-                throw new Error(`Cannot batch until all readiness checks pass: ${readinessState.blockers.map(check => check.displayText).join('; ')}.`);
-            }
-
-            if (readinessState.status !== 'pass') {
-                throw new Error('Cannot batch until readiness checks pass.');
-            }
-        }
+        const reviewGate = await ensureInvoiceReviewGateReady(invoiceId, {
+            checkReadiness: !skipReadinessCheck
+        });
+        if (!reviewGate.allowed) throw new Error(reviewGate.message);
 
         if (isCurrentlyBatchedInServiceTitan()) {
             const verifiedStatus = getServiceTitanBatchStatus();
@@ -4707,6 +4710,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
         const recallWarrantyReview = getInvoiceRecallWarrantyReview(invoiceId);
         const recallWarrantyTriggered = recallWarrantyReview?.status === 'ready' && recallWarrantyReview.triggered;
         const recallWarrantyAcknowledged = hasAcknowledgedInvoiceRecallWarranty(invoiceId);
+        const recallWarrantyReviewRequired = recallWarrantyTriggered && !recallWarrantyAcknowledged;
         const recallWarrantyMatchedTerms = recallWarrantyReview?.matchedTerms || [];
         const partialServiceQuantityReview = getInvoicePartialServiceQuantityReview(invoiceId);
         const partialServiceQuantityTriggered = partialServiceQuantityReview?.status === 'ready' && partialServiceQuantityReview.triggered;
@@ -4776,7 +4780,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
                         }
                         ${buttonRow([
                             smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceId || badMaterialsCount === 0), 'st-btn-action'),
-                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || !invoiceId || badMaterialsCount === 0), 'st-btn-success')
+                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || recallWarrantyReviewRequired || partialServiceQuantityReviewRequired || equipmentReviewRequired || !invoiceId || badMaterialsCount === 0), 'st-btn-success')
                         ])}
                     </div>
                 ` : ''}
@@ -4820,7 +4824,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
                             </label>
                         ` : ''}
                         ${buttonRow([
-                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || equipmentReviewRequired || partialServiceQuantityReviewRequired || !invoiceId), 'st-btn-success'),
+                            smallButton('st-mark-reviewed-btn', 'Mark Reviewed', disableForRunner(readinessActionDisabled || recallWarrantyReviewRequired || equipmentReviewRequired || partialServiceQuantityReviewRequired || !invoiceId), 'st-btn-success'),
                             smallButton('st-remove-reviewed-btn', 'Remove', disableForRunner(!invoiceId), 'st-btn-secondary')
                         ])}
                         ${buttonRow([
@@ -4845,7 +4849,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
                             smallButton('st-clear-active-batch-btn', 'Clear Batch', disableForRunner(false), 'st-btn-muted')
                         ])}
                         ${buttonRow([
-                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessActionDisabled || partialServiceQuantityReviewRequired || !activeBatch || !invoiceId), 'st-btn-success'),
+                            smallButton('st-batch-current-btn', 'Batch Current', disableForRunner(readinessActionDisabled || recallWarrantyReviewRequired || equipmentReviewRequired || partialServiceQuantityReviewRequired || !activeBatch || !invoiceId), 'st-btn-success'),
                             smallButton('st-batch-reviewed-queue-btn', 'Batch Queue', disableForRunner(!activeBatch || !invoiceId), 'st-btn-purple')
                         ])}
                     </div>
