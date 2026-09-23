@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — DEV
 // @namespace    ST-Toolkits
-// @version      1.0.86.202609191837
+// @version      1.0.87.202609231231
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.dev.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "DEV";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.86";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "ed485797c2628041e60311756079e53f53c74e27";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.87";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "6525d111bbb4086efad62ba57ecafb9ddd164634";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "6525d11";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite DEV v1.0.86 loaded\nBuilt: 2026-09-19T23:37:54.737Z\nSource: ed485797c2628041e60311756079e53f53c74e27\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite DEV v1.0.87 loaded\nBuilt: 2026-09-23T17:31:43.335Z\nSource: 6525d111bbb4086efad62ba57ecafb9ddd164634\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.42\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -1003,6 +1003,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
     const refreshStateByInvoiceId = new Map();
     const refreshInFlightInvoiceIds = new Set();
     const GOODLEAP_FINANCE_FEE_NAME = 'Finance fee for GM tracking';
+    const GM_FINANCE_PAYMENT_TYPES = new Set(['goodleap', 'greensky']);
+
+    function getFinancePaymentProviderLabel(review) {
+        if (review?.hasGoodLeapPayment && review?.hasGreenSkyPayment) return 'GoodLeap / GreenSky';
+        if (review?.hasGreenSkyPayment) return 'GreenSky';
+        return 'GoodLeap';
+    }
 
     function getTabId() {
         const existing = sessionStorage.getItem(TAB_ID_KEY);
@@ -1293,6 +1300,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
                 status: 'error',
                 triggered: false,
                 hasGoodLeapPayment: false,
+                hasGreenSkyPayment: false,
                 hasFinanceFeeMaterial: false,
                 matchingPayments: [],
                 matchingMaterials: [],
@@ -1301,13 +1309,16 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
         }
 
         const matchingPayments = payments.filter(payment =>
-            typeof payment?.TypeName === 'string' && payment.TypeName.trim().toLowerCase() === 'goodleap'
+            typeof payment?.TypeName === 'string' && GM_FINANCE_PAYMENT_TYPES.has(payment.TypeName.trim().toLowerCase())
         );
+        const hasGoodLeapPayment = matchingPayments.some(payment => payment.TypeName.trim().toLowerCase() === 'goodleap');
+        const hasGreenSkyPayment = matchingPayments.some(payment => payment.TypeName.trim().toLowerCase() === 'greensky');
         if (!matchingPayments.length) {
             return {
                 status: 'ready',
                 triggered: false,
                 hasGoodLeapPayment: false,
+                hasGreenSkyPayment: false,
                 hasFinanceFeeMaterial: false,
                 matchingPayments: [],
                 matchingMaterials: []
@@ -1319,7 +1330,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
             return {
                 status: 'error',
                 triggered: true,
-                hasGoodLeapPayment: true,
+                hasGoodLeapPayment,
+                hasGreenSkyPayment,
                 hasFinanceFeeMaterial: false,
                 matchingPayments,
                 matchingMaterials: [],
@@ -1343,7 +1355,9 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
         return {
             status: 'ready',
             triggered: true,
-            hasGoodLeapPayment: true,
+            hasGoodLeapPayment,
+            hasGreenSkyPayment,
+            paymentProviderLabel: getFinancePaymentProviderLabel({ hasGoodLeapPayment, hasGreenSkyPayment }),
             hasFinanceFeeMaterial: matchingMaterials.length > 0,
             matchingPayments,
             matchingMaterials
@@ -1359,6 +1373,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
                 status: 'error',
                 triggered: false,
                 hasGoodLeapPayment: false,
+                hasGreenSkyPayment: false,
                 hasFinanceFeeMaterial: false,
                 matchingPayments: [],
                 matchingMaterials: [],
@@ -1387,7 +1402,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
             return {
                 allowed: false,
                 review,
-                message: 'This invoice has a GoodLeap payment but is missing the required material: Finance fee for GM tracking. Add the material in ServiceTitan, then refresh the toolkit.'
+                message: `This invoice has a ${getFinancePaymentProviderLabel(review)} payment but is missing the required material: Finance fee for GM tracking. Add the material in ServiceTitan, then refresh the toolkit.`
             };
         }
         return { allowed: true, review };
@@ -2754,12 +2769,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
 
         evaluateGoodLeapFinanceFee(invoiceData) {
             const review = detectMissingGoodLeapFinanceFee(invoiceData);
+            const providerLabel = getFinancePaymentProviderLabel(review);
             if (review.status === 'error') {
                 return {
                     id: 'goodleap-finance-fee',
                     label: 'GoodLeap Finance Fee',
                     status: 'error',
-                    displayText: `GoodLeap: Could not verify required finance fee${review.message ? ` (${review.message})` : ''}`,
+                    displayText: `${providerLabel}: Could not verify required finance fee${review.message ? ` (${review.message})` : ''}`,
                     isBlocker: true
                 };
             }
@@ -2777,14 +2793,14 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
                     id: 'goodleap-finance-fee',
                     label: 'GoodLeap Finance Fee',
                     status: 'pass',
-                    displayText: 'GoodLeap: Finance fee material present',
+                    displayText: `${providerLabel}: Finance fee material present`,
                     isBlocker: true
                 }
                 : {
                     id: 'goodleap-finance-fee',
                     label: 'GoodLeap Finance Fee',
                     status: 'blocked',
-                    displayText: 'GoodLeap: Finance fee for GM tracking is missing',
+                    displayText: `${providerLabel}: Finance fee for GM tracking is missing`,
                     isBlocker: true
                 };
         },
@@ -4567,10 +4583,11 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "ed48579";
     function renderGoodLeapFinanceFeeWarning(invoiceId) {
         const review = getInvoiceGoodLeapFinanceFeeReview(invoiceId);
         if (!review?.triggered || review.hasFinanceFeeMaterial || review.status !== 'ready') return '';
+        const providerLabel = getFinancePaymentProviderLabel(review);
         return `
             <div class="st-msg st-recall-warranty-warning">
-                <strong>⚠ Missing GoodLeap Finance Fee</strong><br>
-                This invoice has a GoodLeap payment but is missing the required material:<br>
+                <strong>⚠ Missing ${escapeHtml(providerLabel)} Finance Fee</strong><br>
+                This invoice has a ${escapeHtml(providerLabel)} payment but is missing the required material:<br>
                 <strong>${escapeHtml(GOODLEAP_FINANCE_FEE_NAME)}</strong><br>
                 <span class="st-small">Add the material in ServiceTitan, then refresh the toolkit.</span>
             </div>
