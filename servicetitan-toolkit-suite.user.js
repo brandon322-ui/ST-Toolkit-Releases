@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — RELEASE
 // @namespace    ST-Toolkits
-// @version      1.0.89
+// @version      1.0.90
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "RELEASE";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.89";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "434f5efc59749b310d83dd5784c7c0834c487610";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.90";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "c57c7f822325ea42c6f0c60e4738bc609cb6aaa9";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite RELEASE v1.0.89 loaded\nBuilt: 2026-11-16T18:57:00.821Z\nSource: 434f5efc59749b310d83dd5784c7c0834c487610\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.43\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite RELEASE v1.0.90 loaded\nBuilt: 2026-11-16T19:08:46.678Z\nSource: c57c7f822325ea42c6f0c60e4738bc609cb6aaa9\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.44\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -850,7 +850,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.43';
+    const VERSION = '3.3.44';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -2534,10 +2534,18 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
             : null;
     }
 
+    function hasNonStockLabel(value) {
+        return typeof value === 'string' && /\bnon[\s-]*stock\b/i.test(value);
+    }
+
+    function isNonStockMaterialCode(value) {
+        return typeof value === 'string' && (/^ns$/i.test(value.trim()) || hasNonStockLabel(value));
+    }
+
     function isBadMaterialRow(row) {
-        const rowText = (row.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
-        const badPattern = /\bns\b.*\bnonstock\b.*\$1\b.*\bpart\b.*\badjust\b.*\bquantity\b.*\bnon[- ]stock\b/;
-        if (badPattern.test(rowText)) {
+        // The Materials grid displays Name and Code in its first two columns.
+        const [nameCell, codeCell] = row.querySelectorAll(':scope > td, :scope > th');
+        if (hasNonStockLabel(nameCell?.innerText) || isNonStockMaterialCode(codeCell?.innerText)) {
             return true;
         }
 
@@ -3236,20 +3244,9 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
         return Number.isFinite(quantity) ? quantity : null;
     }
 
-    function getMaterialSearchText(material) {
-        return [
-            material?.Code,
-            material?.Name,
-            material?.Description,
-            material?.CostType,
-            material?.ParentSkuName
-        ].join(' ').replace(/\s+/g, ' ').trim().toLowerCase();
-    }
-
     function isBadMaterial(material) {
-        const materialText = getMaterialSearchText(material);
-        const badPattern = /\bns\b.*\bnonstock\b.*\$1\b.*\bpart\b.*\badjust\b.*\bquantity\b.*\bnon[- ]stock\b/;
-        if (badPattern.test(materialText)) {
+        if (isNonStockMaterialCode(material?.Code) ||
+            [material?.Name, material?.CostType, material?.ParentSkuName].some(hasNonStockLabel)) {
             return true;
         }
 
@@ -3538,7 +3535,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
 
             if (startCount === 0) {
                 Store.clearMaterialCleanup();
-                if (!silent) setToolkitMessage('No bad material quantity rows found.');
+                if (!silent) setToolkitMessage('No materials requiring cleanup found.');
                 createBox();
                 return { startCount: 0, remaining: 0, deleted: 0 };
             }
@@ -4483,8 +4480,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
 
                 closeToolkit();
             },
-            'st-clean-materials-btn': () => !state.materialCleanupRunning && state.badMaterialsCount > 0 && cleanBadMaterials(false),
-            'st-clean-review-btn': () => !state.materialCleanupRunning && state.badMaterialsCount > 0 && cleanAndMarkReviewed(),
+            'st-clean-materials-btn': () => !state.materialCleanupRunning && cleanBadMaterials(false),
+            'st-clean-review-btn': () => !state.materialCleanupRunning && cleanAndMarkReviewed(),
             'st-mark-reviewed-btn': () => markReviewed(true),
             'st-remove-reviewed-btn': removeFromQueue,
             'st-show-queue-btn': showQueue,
@@ -4659,7 +4656,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
             toolkitMessage = null;
         }
 
-        const state = { badMaterialsCount, materialCleanupRunning, batchRunnerActive };
+        const state = { materialCleanupRunning, batchRunnerActive };
 
         const box = document.createElement('div');
         box.id = TOOL_ID;
@@ -4757,8 +4754,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "434f5ef";
                             : `<div class="st-small">Materials clean ✓</div>`
                         }
                         ${buttonRow([
-                            smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceId || badMaterialsCount === 0), 'st-btn-action'),
-                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || recallWarrantyReviewRequired || partialServiceQuantityReviewRequired || equipmentReviewRequired || !invoiceId || badMaterialsCount === 0), 'st-btn-success')
+                            smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceId), 'st-btn-action'),
+                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || recallWarrantyReviewRequired || partialServiceQuantityReviewRequired || equipmentReviewRequired || !invoiceId), 'st-btn-success')
                         ])}
                     </div>
                 ` : ''}

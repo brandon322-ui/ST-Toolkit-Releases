@@ -1,13 +1,13 @@
 {
   "channel": "RELEASE",
-  "releaseVersion": "1.0.89",
-  "userscriptVersion": "1.0.89",
-  "sourceCommitSha": "434f5efc59749b310d83dd5784c7c0834c487610",
-  "shortSourceCommitSha": "434f5ef",
-  "releaseArtifactSha256": "c91f0ff806694f8ec6addbd7da9060c307371c4bbf621b69f8d2260f74d19b37",
-  "promotedDevArtifactSha256": "8d89193018e275baa26435f555e2804764aaf7a842a10646cc4bd07ee0f0f195",
-  "devManifestSha256": "7c3c7bb7b8df1053f5a0454f5c840f55356ef3c2d2862faeb3d6b8a820b5712d",
-  "buildTime": "2026-11-16T18:57:00.864Z",
+  "releaseVersion": "1.0.90",
+  "userscriptVersion": "1.0.90",
+  "sourceCommitSha": "c57c7f822325ea42c6f0c60e4738bc609cb6aaa9",
+  "shortSourceCommitSha": "c57c7f8",
+  "releaseArtifactSha256": "beecc542f4b7eea84a94b53fdb9f53c57baa0789b9dd990e7004c25c0b3332e3",
+  "promotedDevArtifactSha256": "407374718f62e1a884f031ceeb89fbcb0101a354e3422e1cbf603b0a72714a8f",
+  "devManifestSha256": "df8da8bfd9dce6d0d0ec54506d9237fe1271d659345d3e007b586ab8e287997c",
+  "buildTime": "2026-11-16T19:08:46.726Z",
   "livePublishedFilename": "servicetitan-toolkit-suite.user.js",
-  "archivedArtifactPath": "releases/1.0.89/servicetitan-toolkit-suite.user.js"
+  "archivedArtifactPath": "releases/1.0.90/servicetitan-toolkit-suite.user.js"
 }
