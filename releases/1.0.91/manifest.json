@@ -1,0 +1,13 @@
+{
+  "channel": "RELEASE",
+  "releaseVersion": "1.0.91",
+  "userscriptVersion": "1.0.91",
+  "sourceCommitSha": "a4c01b5c945e23a0b4b360bfdb24a863e464c66e",
+  "shortSourceCommitSha": "a4c01b5",
+  "releaseArtifactSha256": "18b2ee46b6423092653cc1feccba3ae53c1d2cb55c5387346f1b0a82e10fec46",
+  "promotedDevArtifactSha256": "fe798a0cd3dcfb48caa886c0564ce952ae74031b1630a0d7f7533a516a9ac506",
+  "devManifestSha256": "4207c737b00495cf9038ff2e839a1bd931e4075d30b534473d2a5db7ab4e7980",
+  "buildTime": "2026-11-16T19:33:05.908Z",
+  "livePublishedFilename": "servicetitan-toolkit-suite.user.js",
+  "archivedArtifactPath": "releases/1.0.91/servicetitan-toolkit-suite.user.js"
+}

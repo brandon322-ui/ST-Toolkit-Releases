@@ -13,7 +13,7 @@
 // ==UserScript==
 // @name         ServiceTitan Toolkit Suite — RELEASE
 // @namespace    ST-Toolkits
-// @version      1.0.90
+// @version      1.0.91
 // @description  Combined ServiceTitan toolkit suite generated from source userscripts.
 // @match        *://go.servicetitan.com/*
 // @downloadURL  https://raw.githubusercontent.com/brandon322-ui/ST-Toolkit-Releases/main/servicetitan-toolkit-suite.user.js
@@ -23,12 +23,12 @@
 // ==/UserScript==
 
 const ST_TOOLKIT_SUITE_CHANNEL = "RELEASE";
-const ST_TOOLKIT_SUITE_VERSION = "1.0.90";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "c57c7f822325ea42c6f0c60e4738bc609cb6aaa9";
-const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
+const ST_TOOLKIT_SUITE_VERSION = "1.0.91";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHA = "a4c01b5c945e23a0b4b360bfdb24a863e464c66e";
+const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "a4c01b5";
 
 (function () {
-  console.log("ServiceTitan Toolkit Suite RELEASE v1.0.90 loaded\nBuilt: 2026-11-16T19:08:46.678Z\nSource: c57c7f822325ea42c6f0c60e4738bc609cb6aaa9\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.44\n- equipment-toolkit.user.js v3.3.9");
+  console.log("ServiceTitan Toolkit Suite RELEASE v1.0.91 loaded\nBuilt: 2026-11-16T19:33:05.866Z\nSource: a4c01b5c945e23a0b4b360bfdb24a863e464c66e\nModules:\n- st-toolkit-core.user.js v0.2.2\n- st-toolkit-manager.user.js v0.2.0\n- servicetitan-auto-collapse-menu.user.js v1.0.3\n- st-auto-close-dialpad.user.js v1.2\n- invoice-toolkit.user.js v3.3.45\n- equipment-toolkit.user.js v3.3.9");
 })();
 
 // ---- st-toolkit-core.user.js ----
@@ -850,7 +850,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
     if (window[INSTANCE_KEY]) return;
     window[INSTANCE_KEY] = true;
 
-    const VERSION = '3.3.44';
+    const VERSION = '3.3.45';
     const TOOL_ID = 'st-invoice-toolkit-box';
     const STYLE_ID = 'st-invoice-toolkit-style';
     const THEME_STYLE_ID = 'st-invoice-toolkit-theme';
@@ -991,11 +991,11 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
     let ownedRunnerRecoverySnapshot = null;
     let toolkitClosed = false;
     let dragState = null;
-    let lastRenderedBadMaterialsCount = null;
     let equipmentReviewAcknowledgementInvoiceId = null;
     let recallWarrantyAcknowledgementInvoiceId = null;
     const partialServiceQuantityAcknowledgedInvoiceIds = new Set();
     const readinessStateByInvoiceId = new Map();
+    const materialCleanupCountByInvoiceId = new Map();
     const readinessFetchByInvoiceId = new Map();
     const recallWarrantyReviewByInvoiceId = new Map();
     const partialServiceQuantityReviewByInvoiceId = new Map();
@@ -2565,14 +2565,6 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
         return getMaterialsRows().filter(isBadMaterialRow);
     }
 
-    function getBadMaterialExamples(rows) {
-        return rows
-            .map(row => getQtyCell(row)?.innerText.trim())
-            .filter(Boolean)
-            .slice(0, 4)
-            .join(', ');
-    }
-
     function sleep(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
@@ -3020,6 +3012,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
                 storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
                 storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
                 storeInvoiceFinancingFeeReview(invoiceId, invoiceData);
+                storeMaterialCleanupCount(invoiceId, invoiceData);
                 const invoiceDataId = typeof invoiceData?.Id === 'number' || typeof invoiceData?.Id === 'string'
                     ? String(invoiceData.Id)
                     : null;
@@ -3060,6 +3053,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
                 if (READINESS_DEBUG) console.log('[readiness] save-memory', invoiceId, readiness);
             })
             .catch(err => {
+                materialCleanupCountByInvoiceId.set(invoiceId, null);
                 recallWarrantyReviewByInvoiceId.set(invoiceId, {
                     status: 'error',
                     message: err?.message || 'Invoice summary could not be checked'
@@ -3132,7 +3126,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
 
     async function refreshCurrentInvoiceToolkit() {
         const invoiceId = getInvoiceId();
-        if (!invoiceId || refreshInFlightInvoiceIds.has(invoiceId)) return;
+        if (!invoiceId || refreshInFlightInvoiceIds.has(invoiceId) || getActiveMaterialCleanupForInvoice(invoiceId)?.running) return;
 
         refreshInFlightInvoiceIds.add(invoiceId);
         const refreshingState = { status: 'refreshing', message: 'Refreshing...' };
@@ -3157,6 +3151,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
             storeInvoiceRecallWarrantyReview(invoiceId, invoiceData);
             storeInvoicePartialServiceQuantityReview(invoiceId, invoiceData);
             storeInvoiceFinancingFeeReview(invoiceId, invoiceData);
+            storeMaterialCleanupCount(invoiceId, invoiceData);
             const checks = OperationalReadiness.evaluate(invoiceData, businessUnitSource);
             readinessStateByInvoiceId.set(invoiceId, {
                 invoiceId,
@@ -3176,16 +3171,14 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
             }, 2200);
         } catch (error) {
             restoreInvoiceAnalysisSnapshot(invoiceId, cacheSnapshot);
+            materialCleanupCountByInvoiceId.set(invoiceId, null);
             refreshStateByInvoiceId.set(invoiceId, {
                 status: 'error',
                 message: `Refresh failed: ${error?.message || 'Could not fetch invoice data.'}`
             });
         } finally {
-            try {
-                if (getInvoiceId() === invoiceId) createBox();
-            } finally {
-                refreshInFlightInvoiceIds.delete(invoiceId);
-            }
+            refreshInFlightInvoiceIds.delete(invoiceId);
+            if (getInvoiceId() === invoiceId) createBox();
         }
     }
 
@@ -3262,8 +3255,26 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
             .filter(isBadMaterial);
     }
 
-    async function fetchBadMaterials(invoiceId = getInvoiceId()) {
-        return getBadMaterialsFromInvoice(await fetchInvoiceData(invoiceId));
+    function storeMaterialCleanupCount(invoiceId, invoiceData) {
+        if (String(invoiceData?.Id) !== invoiceId || !Array.isArray(invoiceData?.Materials)) {
+            materialCleanupCountByInvoiceId.set(invoiceId, null);
+            return null;
+        }
+
+        const materials = getBadMaterialsFromInvoice(invoiceData);
+        materialCleanupCountByInvoiceId.set(invoiceId, materials.length);
+        return materials;
+    }
+
+    function getMaterialCleanupCount(invoiceId) {
+        if (refreshInFlightInvoiceIds.has(invoiceId)) return undefined;
+        return materialCleanupCountByInvoiceId.get(invoiceId);
+    }
+
+    async function fetchBadMaterials(invoiceId) {
+        const materials = storeMaterialCleanupCount(invoiceId, await fetchInvoiceData(invoiceId));
+        if (!materials) throw new Error('Could not verify materials for this invoice.');
+        return materials;
     }
 
     async function deleteMaterialById(materialId) {
@@ -3513,8 +3524,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
     }
 
     async function cleanBadMaterials(silent = false, options = {}) {
+        const invoiceId = getInvoiceId();
         try {
-            const invoiceId = getInvoiceId();
             const activeCleanup = getActiveMaterialCleanupForInvoice(invoiceId);
             if (activeCleanup?.running) {
                 createBox();
@@ -3567,6 +3578,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
             if (reloadAfter && deleted > 0) refreshInvoiceAfterMaterialCleanup();
             return { startCount, remaining, deleted };
         } catch (err) {
+            materialCleanupCountByInvoiceId.set(invoiceId, null);
             Store.clearMaterialCleanup();
             setToolkitMessage(err.message);
             createBox();
@@ -3591,7 +3603,7 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
             }
 
             const result = await cleanBadMaterials(true, { reloadAfter: false });
-            if (result.inProgress) return;
+            if (result.inProgress || result.startCount === 0) return;
 
             if (result.remaining > 0) {
                 setToolkitMessage(`Materials cleaned partially. Deleted ${result.deleted}. ${result.remaining} bad rows still remain. Not marked reviewed.`);
@@ -4480,8 +4492,8 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
 
                 closeToolkit();
             },
-            'st-clean-materials-btn': () => !state.materialCleanupRunning && cleanBadMaterials(false),
-            'st-clean-review-btn': () => !state.materialCleanupRunning && cleanAndMarkReviewed(),
+            'st-clean-materials-btn': () => state.canCleanMaterials && cleanBadMaterials(false),
+            'st-clean-review-btn': () => state.canCleanMaterials && cleanAndMarkReviewed(),
             'st-mark-reviewed-btn': () => markReviewed(true),
             'st-remove-reviewed-btn': removeFromQueue,
             'st-show-queue-btn': showQueue,
@@ -4638,25 +4650,20 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
             inQueue = false;
         }
 
-        const badMaterialRows = getBadMaterialRows();
-        const badMaterialsCount = badMaterialRows.length;
-        const badMaterialExamples = getBadMaterialExamples(badMaterialRows);
-        lastRenderedBadMaterialsCount = badMaterialsCount;
-
-        if (
-            badMaterialsCount === 0 &&
-            toolkitMessage?.message === 'Stopped. Could not find delete button inside material row.'
-        ) {
-            Store.clearMessage();
-            toolkitMessage = null;
-        }
+        const badMaterialsCount = getMaterialCleanupCount(invoiceId);
+        const canCleanMaterials = Boolean(invoiceId && !materialCleanupRunning && badMaterialsCount > 0);
+        const materialsStatus = badMaterialsCount === undefined
+            ? 'Checking materials…'
+            : badMaterialsCount === null
+                ? 'Could not verify materials. Refresh to retry.'
+                : badMaterialsCount === 0 ? 'Materials clean ✓' : '';
 
         if (readinessState.status === 'pass' && isReadinessBlockerMessage(toolkitMessage?.message)) {
             Store.clearMessage();
             toolkitMessage = null;
         }
 
-        const state = { materialCleanupRunning, batchRunnerActive };
+        const state = { canCleanMaterials, batchRunnerActive };
 
         const box = document.createElement('div');
         box.id = TOOL_ID;
@@ -4746,16 +4753,13 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
                     ` : ''}
                 ` : ''}
 
-                ${sectionHeader(`Materials — ${badMaterialsCount} bad rows`, 'materials', sections.materials)}
+                ${sectionHeader(Number.isInteger(badMaterialsCount) ? `Materials — ${badMaterialsCount} bad rows` : 'Materials', 'materials', sections.materials)}
                 ${sections.materials ? `
                     <div class="st-card">
-                        ${badMaterialsCount > 0
-                            ? `<div class="st-small">Examples: ${escapeHtml(badMaterialExamples)}</div>`
-                            : `<div class="st-small">Materials clean ✓</div>`
-                        }
+                        ${materialsStatus ? `<div class="st-small">${escapeHtml(materialsStatus)}</div>` : ''}
                         ${buttonRow([
-                            smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(materialCleanupRunning || !invoiceId), 'st-btn-action'),
-                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(materialCleanupRunning || readinessActionDisabled || recallWarrantyReviewRequired || partialServiceQuantityReviewRequired || equipmentReviewRequired || !invoiceId), 'st-btn-success')
+                            smallButton('st-clean-materials-btn', 'Clean Materials', disableForRunner(!canCleanMaterials), 'st-btn-action'),
+                            smallButton('st-clean-review-btn', 'Clean + Review', disableForRunner(!canCleanMaterials || readinessActionDisabled || recallWarrantyReviewRequired || partialServiceQuantityReviewRequired || equipmentReviewRequired), 'st-btn-success')
                         ])}
                     </div>
                 ` : ''}
@@ -4866,20 +4870,6 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
         return startupPromise;
     }
 
-    function refreshMaterialsIfChanged() {
-        if (!isInvoicePage() || dragState) return;
-
-        const currentCount = getBadMaterialRows().length;
-        if (lastRenderedBadMaterialsCount === null) {
-            lastRenderedBadMaterialsCount = currentCount;
-            return;
-        }
-
-        if (currentCount !== lastRenderedBadMaterialsCount) {
-            createBox();
-        }
-    }
-
     function handleRouteChange() {
         const currentRouteKey = window.location.href;
         if (currentRouteKey === lastRouteKey) return;
@@ -4957,7 +4947,6 @@ const ST_TOOLKIT_SUITE_SOURCE_COMMIT_SHORT_SHA = "c57c7f8";
 
     setInterval(applyReviewedTabMarker, 1000);
     setInterval(handleRouteChange, 1000);
-    setInterval(refreshMaterialsIfChanged, 1500);
     setInterval(continueBatchRunnerIfNeeded, 2500);
     setInterval(refreshOwnedRunnerHeartbeat, 5000);
     document.addEventListener('visibilitychange', handleVisibilityChange);
